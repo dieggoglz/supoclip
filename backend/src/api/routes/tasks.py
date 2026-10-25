@@ -41,7 +41,7 @@ from ...stream_source import (
     fetch_stream_info,
 )
 from ...font_registry import is_font_accessible
-from ...clip_duration import normalize_clip_length, validate_clip_length
+from ...clip_duration import normalize_clip_length, requested_clip_length
 from ...clip_cleanup import (
     new_task_cleanup_settings,
     normalize_clip_cleanup_settings,
@@ -465,7 +465,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
     if not isinstance(add_subtitles, bool):
         add_subtitles = True
     try:
-        clip_length = validate_clip_length(data.get("clip_length", "auto"))
+        clip_length = requested_clip_length(data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     cleanup_settings = new_task_cleanup_settings(data)

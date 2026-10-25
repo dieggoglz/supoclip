@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src import ai, video_utils
-from src.clip_duration import CLIP_DURATIONS, clip_duration, normalize_clip_length, validate_clip_length
+from src.clip_duration import CLIP_DURATIONS, clip_duration, normalize_clip_length, requested_clip_length, validate_clip_length
 from src.services.task_service import TaskService
 from src.services.video_service import VideoService
 from src.services import video_service
@@ -140,3 +140,58 @@ async def test_regenerated_ranges_keep_the_stored_clip_text(tmp_path, monkeypatc
     single = await VideoService.create_single_clip(source, segment, 0, tmp_path)
     batch = video_utils.create_clips_from_segments(source, [segment], tmp_path)
     assert single["text"] == batch[0]["text"] == "Edited caption text."
+
+
+@pytest.mark.parametrize("value,minimum,maximum", [
+    ("custom:15-60", 15, 60), ("custom:20-45", 20, 45), ("custom:60-180", 60, 180),
+])
+def test_custom_ranges_reach_prompts_and_repair(value, minimum, maximum):
+    bounds = clip_duration(value)
+    assert (bounds.minimum, bounds.maximum) == (minimum, maximum)
+    assert bounds.minimum <= bounds.ideal_minimum <= bounds.ideal_maximum <= bounds.maximum - 5
+    assert f"must be {minimum}-{maximum} seconds" in ai.build_transcript_system_prompt(value)
+    text = transcript(240)
+    result = ai._validate_segments(
+        [ai.TranscriptSegment(start_time="00:00", end_time="03:30", text="Useful context and thought.")],
+        ai._parse_transcript_lines(text), ai._parse_transcript_spans(text), value,
+    )
+    start_seconds, end_seconds = ai._segment_bounds_seconds(result[0])
+    assert minimum <= end_seconds - start_seconds <= maximum
+
+
+@pytest.mark.parametrize("value", [
+    "custom:", "custom:30", "custom:45-20", "custom:20-25", "custom:2-30", "custom:30-200", "custom: 20-45",
+])
+def test_out_of_bounds_custom_ranges_are_rejected(value):
+    with pytest.raises(ValueError):
+        validate_clip_length(value)
+    assert normalize_clip_length(value) == "auto"
+
+
+@pytest.mark.parametrize("data,expected", [
+    ({}, "auto"),
+    ({"clip_length": "long"}, "long"),
+    ({"min_clip_seconds": 20, "max_clip_seconds": 45}, "custom:20-45"),
+    ({"max_clip_seconds": 45}, "custom:15-45"),
+    ({"clip_length": "long", "min_clip_seconds": 90}, "custom:90-120"),
+])
+def test_requested_range_defaults_missing_bounds_to_the_preset(data, expected):
+    assert requested_clip_length(data) == expected
+
+
+@pytest.mark.parametrize("data", [
+    {"min_clip_seconds": "20", "max_clip_seconds": 45},
+    {"min_clip_seconds": True, "max_clip_seconds": 45},
+    {"min_clip_seconds": 50, "max_clip_seconds": 45},
+    {"min_clip_seconds": 70},
+])
+def test_invalid_requested_ranges_are_rejected(data):
+    with pytest.raises(ValueError):
+        requested_clip_length(data)
+
+
+def test_custom_ranges_get_their_own_analysis_cache():
+    source_key = TaskService._build_cache_key("upload://talk.mp4", "video_url", "fast")
+    keys = {TaskService._build_analysis_cache_key(source_key, value)
+            for value in ("auto", "custom:15-60", "custom:20-45")}
+    assert len(keys) == 3
