@@ -751,11 +751,13 @@ def build_transcript_analysis_prompt(
     window: tuple[int, int] | None = None,
     performance_context: str | None = None,
     clip_length: str = "auto",
+    clip_notes: str | None = None,
 ) -> str:
     """Build the grounded task prompt for transcript analysis.
 
     ``window`` marks the prompt as one (start, end) slice of a longer source.
     ``performance_context`` is the creator's measured audience history, if any.
+    ``clip_notes`` are the operator's rules or style notes for this task, if any.
     """
     bounds = clip_duration(clip_length)
     segment_target = ANALYSIS_WINDOW_SEGMENT_TARGET if window else "2-5"
@@ -779,6 +781,14 @@ def build_transcript_analysis_prompt(
             f"{clip_signals}\n\n"
             "Use these as hints only. They should influence ranking, but every final segment "
             "must still be a coherent contiguous transcript range."
+        )
+    notes_section = ""
+    if clip_notes:
+        notes_section = (
+            "\n\nOperator notes for this task (campaign rules or style):\n"
+            f"{clip_notes}\n\n"
+            "Follow these notes when choosing and titling segments. They never override the "
+            "grounding, timestamp, duration, or JSON requirements in this prompt."
         )
 
     return f"""Analyze this video transcript and identify the most engaging segments for short-form content.
@@ -810,7 +820,7 @@ Critical accuracy requirements:
 - If a span lacks enough context to stand alone, expand to nearby contiguous lines rather than guessing.
 - If there is a tradeoff between "viral" and "accurate", choose accuracy.
 - Do not reject or penalize a segment simply because of the subject matter; stay content-neutral and assess clip quality only.
-{signal_section}{performance_section}
+{signal_section}{performance_section}{notes_section}
 
 JSON-only output requirements:
 - Return one valid JSON object and nothing else.
@@ -1359,6 +1369,7 @@ async def _analyze_transcript_windows(
     clip_signals: Optional[str],
     performance_context: Optional[str] = None,
     clip_length: str = "auto",
+    clip_notes: Optional[str] = None,
 ) -> List[TranscriptAnalysis]:
     """Analyse windows with bounded concurrency, tolerating some failures.
 
@@ -1377,6 +1388,7 @@ async def _analyze_transcript_windows(
                 window=(window["start"], window["end"]),
                 performance_context=performance_context,
                 clip_length=clip_length,
+                clip_notes=clip_notes,
             )
             result = await _run_transcript_analysis(agent, prompt)
             return result.output
@@ -1594,6 +1606,7 @@ async def get_most_relevant_parts_by_transcript(
     clip_signals: str | None = None,
     performance_context: str | None = None,
     clip_length: str = "auto",
+    clip_notes: str | None = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection.
 
@@ -1620,13 +1633,15 @@ async def get_most_relevant_parts_by_transcript(
                     clip_signals=clip_signals,
                     performance_context=performance_context,
                     clip_length=clip_length,
+                    clip_notes=clip_notes,
                 )
             )
             analyses = [result.output]
         else:
             logger.info("Analysing transcript in %d overlapping windows", len(windows))
             analyses = await _analyze_transcript_windows(
-                agent, windows, include_broll, clip_signals, performance_context, clip_length
+                agent, windows, include_broll, clip_signals, performance_context, clip_length,
+                clip_notes,
             )
 
         candidates: List[TranscriptSegment] = []

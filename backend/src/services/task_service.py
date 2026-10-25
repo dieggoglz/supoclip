@@ -72,15 +72,20 @@ class TaskService(ClipEditingMixin):
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _build_analysis_cache_key(cache_key: str, clip_length: str = "auto") -> str:
+    def _build_analysis_cache_key(
+        cache_key: str, clip_length: str = "auto", clip_notes: Optional[str] = None
+    ) -> str:
         """Row holding the analysis for a preset. Auto keeps the source row.
 
         The source and transcript do not depend on the preset, so other presets
         store only their analysis under a derived key and share the rest.
+        Operator notes change the selection, so they get their own row too.
         """
-        if validate_clip_length(clip_length) == "auto":
+        if validate_clip_length(clip_length) == "auto" and not clip_notes:
             return cache_key
         payload = f"{cache_key}|length:{clip_length}"
+        if clip_notes:
+            payload += f"|notes:{clip_notes}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     async def _media_limits(self, user_id: Optional[str]) -> tuple[Optional[str], Optional[int]]:
@@ -327,6 +332,7 @@ class TaskService(ClipEditingMixin):
         clip_ready_callback: Optional[Callable] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
         clip_length: str = "auto",
+        clip_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -366,7 +372,9 @@ class TaskService(ClipEditingMixin):
             cache_key = self._build_cache_key(
                 url, source_type, processing_mode, download_quality
             )
-            analysis_cache_key = self._build_analysis_cache_key(cache_key, clip_length)
+            analysis_cache_key = self._build_analysis_cache_key(
+                cache_key, clip_length, clip_notes
+            )
 
             cache_entry = await self.cache_repo.get_cache(self.db, cache_key)
             cached_transcript = (
@@ -450,6 +458,7 @@ class TaskService(ClipEditingMixin):
                 should_cancel=should_cancel,
                 performance_context=performance_context,
                 clip_length=clip_length,
+                clip_notes=clip_notes,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3

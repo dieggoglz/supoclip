@@ -142,6 +142,26 @@ shorter than the requested duration can only produce a shorter clip. Existing
 clients that omit the field keep Auto behavior. The web app passes the account's
 saved default explicitly; API and MCP callers should set their preferred preset.
 
+For an exact range, pass `min_clip_seconds` and/or `max_clip_seconds` (integers,
+5–180 seconds, at least 10 seconds apart). A missing bound comes from
+`clip_length` (Auto by default), so `{"max_clip_seconds": 45}` means 15–45. The
+range is stored as `clip_length: "custom:MIN-MAX"` and behaves like a preset for
+selection, render caps, caching and resume.
+
+`clip_notes` (optional string, up to 2,000 characters) adds operator rules or
+style notes to the clip-selection prompt, for example a campaign's content rules.
+Notes never override the grounding, timestamp or duration rules, are kept for
+resume, and get their own analysis cache entry.
+
+```json
+{
+  "source": {"url": "https://www.youtube.com/watch?v=VIDEO_ID"},
+  "min_clip_seconds": 20,
+  "max_clip_seconds": 45,
+  "clip_notes": "Keep the host as the main speaker. Skip sponsor reads."
+}
+```
+
 Deploy the `default_clip_length` user migration (through either migration runner)
 before the frontend. Ship the API and worker together so the worker accepts the
 new optional job argument. No new environment variables are required.

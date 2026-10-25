@@ -319,6 +319,7 @@ class VideoService:
         clip_signals: Optional[str] = None,
         performance_context: Optional[str] = None,
         clip_length: str = "auto",
+        clip_notes: Optional[str] = None,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -330,6 +331,7 @@ class VideoService:
             clip_signals=clip_signals,
             performance_context=performance_context,
             clip_length=clip_length,
+            clip_notes=clip_notes,
         )
         logger.info(
             f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found"
@@ -565,6 +567,7 @@ class VideoService:
         should_cancel: Optional[Callable[[], Awaitable[bool]]] = None,
         performance_context: Optional[str] = None,
         clip_length: str = "auto",
+        clip_notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -771,6 +774,7 @@ class VideoService:
                     clip_signals=clip_signals,
                     performance_context=performance_context,
                     clip_length=clip_length,
+                    clip_notes=clip_notes,
                 )
 
             # Step 4: Create clips

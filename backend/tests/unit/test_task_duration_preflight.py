@@ -191,3 +191,47 @@ async def test_invalid_clip_length_rejected_before_billing_or_download(monkeypat
     service.create_task_with_source.assert_not_awaited()
     queue.enqueue_processing_job.assert_not_awaited()
     preflight.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_range_and_notes_are_persisted_and_queued(monkeypatch, creation):
+    request, _, queue, _ = creation
+    request.json.return_value.update(
+        min_clip_seconds=20, max_clip_seconds=45, clip_notes="  Keep the host as the main speaker.  "
+    )
+    monkeypatch.setattr(tasks, "async_get_youtube_video_info", AsyncMock(return_value={"duration": 300}))
+    await tasks.create_task(request, db=None)
+    metadata = tasks._save_task_source_metadata.await_args.args[1]
+    assert metadata["clip_length"] == "custom:20-45"
+    assert metadata["clip_notes"] == "Keep the host as the main speaker."
+    assert queue.enqueue_processing_job.await_args.args[-1] == "custom:20-45"
+    assert queue.enqueue_processing_job.await_args.kwargs["clip_notes"] == "Keep the host as the main speaker."
+
+
+@pytest.mark.asyncio
+async def test_tasks_without_new_fields_keep_auto_and_no_notes(monkeypatch, creation):
+    request, _, queue, _ = creation
+    monkeypatch.setattr(tasks, "async_get_youtube_video_info", AsyncMock(return_value={"duration": 300}))
+    await tasks.create_task(request, db=None)
+    assert queue.enqueue_processing_job.await_args.args[-1] == "auto"
+    assert queue.enqueue_processing_job.await_args.kwargs["clip_notes"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields", [
+    {"min_clip_seconds": 50, "max_clip_seconds": 45},
+    {"max_clip_seconds": "45"},
+    {"clip_notes": 42},
+    {"clip_notes": "x" * 2001},
+])
+async def test_invalid_range_or_notes_rejected_before_billing(monkeypatch, creation, fields):
+    request, service, queue, _ = creation
+    request.json.return_value.update(fields)
+    preflight = AsyncMock()
+    monkeypatch.setattr(tasks, "async_get_youtube_video_info", preflight)
+    with pytest.raises(HTTPException) as error:
+        await tasks.create_task(request, db=None)
+    assert error.value.status_code == 422
+    tasks.BillingService.assert_can_create_task.assert_not_awaited()
+    queue.enqueue_processing_job.assert_not_awaited()
+    preflight.assert_not_awaited()

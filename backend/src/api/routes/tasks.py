@@ -42,6 +42,7 @@ from ...stream_source import (
 )
 from ...font_registry import is_font_accessible
 from ...clip_duration import normalize_clip_length, requested_clip_length
+from ...clip_notes import normalize_clip_notes, validate_clip_notes
 from ...clip_cleanup import (
     new_task_cleanup_settings,
     normalize_clip_cleanup_settings,
@@ -466,6 +467,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
         add_subtitles = True
     try:
         clip_length = requested_clip_length(data)
+        clip_notes = validate_clip_notes(data.get("clip_notes"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     cleanup_settings = new_task_cleanup_settings(data)
@@ -530,6 +532,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                         {
                             "processing_job_id": processing_job_id,
                             "clip_length": clip_length,
+                            "clip_notes": clip_notes,
                             **_stream_resolution_metadata(stream_metadata),
                         },
                         source_url=raw_source["url"],
@@ -559,6 +562,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                     add_subtitles,
                     cleanup_settings,
                     clip_length,
+                    clip_notes=clip_notes,
                     _job_id=processing_job_id,
                 )
 
@@ -1382,6 +1386,7 @@ async def resume_task(
                         add_subtitles,
                         cleanup_settings,
                         normalize_clip_length(metadata.get("clip_length")),
+                        clip_notes=normalize_clip_notes(metadata.get("clip_notes")),
                         _job_id=processing_job_id,
                     )
                 except Exception:
