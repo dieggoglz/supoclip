@@ -211,6 +211,16 @@ the API and worker together so the worker accepts the `transcript_only` job argu
   - The task goes to `processing` and back to `completed`; poll `GET /{task_id}`.
     Its `progress_message` is `Rendered N of M clips` or `Render failed: …`, and the
     new clips appear in `GET /{task_id}/clips`.
+  - Optional `ending` per segment, `{"tail_s": 0.3, "hold_s": 0.6}` (tail 0–1 s,
+    hold 0–3 s), for a soft close:
+    - the clip runs to `end + tail_s`, and picture and sound start fading exactly at `end`;
+    - the sound is silent by the end of the tail;
+    - the last frame is then held `hold_s` seconds, silent, until black.
+
+    With an ending, the end is never extended into the next sentence (normally a
+    range that stops within 0.05 s of another word is extended to finish that
+    sentence). Keep `end + tail_s` short of the next word. Without `ending`, the
+    render is unchanged.
 
 The worker runs it as the `render_task_segments` job (one try, 30 min timeout):
 ship the API and worker together.

@@ -37,8 +37,8 @@ def test_valid_segments_are_normalized():
         [{"start": 1, "end": 20.5, "hook_title": "  A title  "}, {"start": 30, "end": 45}], 60
     )
     assert segments == [
-        {"start": 1.0, "end": 20.5, "hook_title": "A title"},
-        {"start": 30.0, "end": 45.0, "hook_title": None},
+        {"start": 1.0, "end": 20.5, "hook_title": "A title", "ending": None},
+        {"start": 30.0, "end": 45.0, "hook_title": None, "ending": None},
     ]
 
 
@@ -114,7 +114,8 @@ async def test_render_is_queued_and_the_task_reserved(monkeypatch):
     args, kwargs = service.task_repo.update_task_status.await_args
     assert args[1:] == ("task-1", "processing")
     assert kwargs == {"progress": 0, "progress_message": "Rendering 1 clips", "expected_statuses": ["completed"]}
-    enqueue.assert_awaited_once_with("render_task_segments", "task-1", [{"start": 0.0, "end": 10.0, "hook_title": None}])
+    enqueue.assert_awaited_once_with(
+        "render_task_segments", "task-1", [{"start": 0.0, "end": 10.0, "hook_title": None, "ending": None}])
 
 
 @pytest.mark.asyncio
@@ -279,3 +280,74 @@ async def test_worker_failure_leaves_the_task_usable(monkeypatch):
     assert result["rendered"] == 0 and "download" in result["error"]
     args, kwargs = repo.update_task_status.await_args
     assert args[2] == "completed" and kwargs["progress_message"].startswith("Render failed:")
+
+
+# ---------------------------------------------------------------- endings (ticket 27 of clip-ops)
+
+def test_ending_is_optional_and_validated():
+    plain = validate_render_segments([{"start": 0, "end": 10}], 60)[0]
+    assert plain["ending"] is None
+    ended = validate_render_segments([{"start": 0, "end": 10, "ending": {"tail_s": 0.3, "hold_s": 0.6}}], 60)[0]
+    assert ended["ending"] == {"tail_s": 0.3, "hold_s": 0.6}
+    assert validate_render_segments([{"start": 0, "end": 10, "ending": {"tail_s": 0, "hold_s": 0}}], 60)[0]["ending"] is None
+
+
+@pytest.mark.parametrize("ending, message", [
+    ("soft", "must be an object"),
+    ({"tail_s": 0.3, "fade": 1}, "must be an object"),
+    ({"tail_s": "0.3"}, "numbers of seconds"),
+    ({"tail_s": 1.5}, "tail_s must be"),
+    ({"hold_s": -1}, "tail_s must be"),
+    ({"hold_s": 4}, "tail_s must be"),
+])
+def test_invalid_endings_are_rejected(ending, message):
+    with pytest.raises(ValueError, match=message):
+        validate_render_segments([{"start": 0, "end": 10, "ending": ending}], 60)
+
+
+def test_ending_tail_cannot_run_past_the_source():
+    with pytest.raises(ValueError, match="past the source"):
+        validate_render_segments([{"start": 50, "end": 60.5, "ending": {"tail_s": 0.9}}], 60)
+
+
+@pytest.mark.asyncio
+async def test_ending_renders_end_plus_tail_exactly_and_applies_the_fade(tmp_path, monkeypatch):
+    service, render, _ = render_service(tmp_path, monkeypatch)
+    applied = []
+    monkeypatch.setattr("src.services.clip_service.apply_clip_ending",
+                        lambda path, tail, hold: applied.append((path.name, tail, hold)) or 9.5 + hold)
+    segments = [{"start": 0.0, "end": 1.0, "hook_title": None, "ending": {"tail_s": 0.25, "hold_s": 0.6}},
+                {"start": 1.1, "end": 1.6, "hook_title": None, "ending": None}]
+    await service.render_segments("task", segments)
+
+    ended, plain = render.segments
+    assert ended["source_ranges"] == [(0.0, 1.25)] and ended["exact_end"] is True
+    assert ended["text"] == "Hello there."            # the tail adds no words
+    assert "exact_end" not in plain and plain["source_ranges"] == [(1.1, 1.6)]
+    assert applied == [("c0.mp4", 0.25, 0.6)]
+    durations = [call.kwargs["duration"] for call in service.clip_repo.create_clip.await_args_list]
+    assert durations == [pytest.approx(10.1), 9.5]     # the hold counts in the stored duration
+    assert render.kwargs["max_clip_seconds"] == pytest.approx(6.25)
+
+
+def test_exact_end_skips_the_sentence_extension(tmp_path, monkeypatch):
+    from src import video_utils
+
+    source = tmp_path / "source.mp4"
+    source.touch()
+    extended = []
+    monkeypatch.setattr(video_utils, "extend_keep_ranges_to_sentence_boundary",
+                        lambda _path, ranges: extended.append(ranges) or ranges)
+    monkeypatch.setattr(video_utils, "build_keep_ranges_from_source_ranges", lambda _p, ranges, _c: list(ranges))
+
+    def render(*args, **kwargs):
+        args[3].touch()
+        return True
+
+    monkeypatch.setattr(video_utils, "create_optimized_clip", render)
+    base = {"start_time": "00:00", "end_time": "00:10", "text": "x", "relevance_score": 0.5, "reasoning": "r",
+            "source_ranges": [(0.0, 10.0)]}
+    video_utils.create_clips_from_segments(source, [base | {"exact_end": True}], tmp_path)
+    assert extended == []
+    video_utils.create_clips_from_segments(source, [base], tmp_path)
+    assert len(extended) == 1

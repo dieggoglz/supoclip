@@ -11,6 +11,10 @@ MAX_RENDER_SEGMENT_SECONDS = 180.0
 RENDER_HOOK_TITLE_MAX_CHARS = 200
 # Sources are measured in whole seconds at creation; allow the rounding.
 DURATION_TOLERANCE_SECONDS = 1.0
+# Optional ending: keep tail_s after the requested end (the last word finishes sounding while
+# everything fades), then hold the last frame hold_s in silence until black.
+MAX_ENDING_TAIL_SECONDS = 1.0
+MAX_ENDING_HOLD_SECONDS = 3.0
 
 
 def _seconds(value: Any) -> Optional[float]:
@@ -46,8 +50,28 @@ def validate_render_segments(value: Any, source_duration_seconds: Optional[float
         hook_title = (hook_title or "").strip() or None
         if hook_title and len(hook_title) > RENDER_HOOK_TITLE_MAX_CHARS:
             raise ValueError(f"Segment {number}: hook_title must be at most {RENDER_HOOK_TITLE_MAX_CHARS} characters")
-        segments.append({"start": start, "end": end, "hook_title": hook_title})
+        ending = _validate_ending(item.get("ending"), number)
+        if ending and source_duration_seconds and end + ending["tail_s"] > source_duration_seconds + DURATION_TOLERANCE_SECONDS:
+            raise ValueError(f"Segment {number}: end plus ending tail runs past the source video")
+        segments.append({"start": start, "end": end, "hook_title": hook_title, "ending": ending})
     return segments
+
+
+def _validate_ending(value: Any, number: int) -> Optional[Dict[str, float]]:
+    """None, or {tail_s, hold_s} within limits (both optional, default 0; both 0 means no ending)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"tail_s", "hold_s"}:
+        raise ValueError(f"Segment {number}: ending must be an object with tail_s and/or hold_s")
+    tail, hold = _seconds(value.get("tail_s", 0)), _seconds(value.get("hold_s", 0))
+    if tail is None or hold is None:
+        raise ValueError(f"Segment {number}: ending tail_s and hold_s must be numbers of seconds")
+    if not 0 <= tail <= MAX_ENDING_TAIL_SECONDS or not 0 <= hold <= MAX_ENDING_HOLD_SECONDS:
+        raise ValueError(
+            f"Segment {number}: ending tail_s must be 0-{MAX_ENDING_TAIL_SECONDS:g} s "
+            f"and hold_s 0-{MAX_ENDING_HOLD_SECONDS:g} s"
+        )
+    return {"tail_s": tail, "hold_s": hold} if tail or hold else None
 
 
 def segment_text(transcript: Dict[str, Any], start: float, end: float) -> str:

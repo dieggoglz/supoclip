@@ -513,7 +513,10 @@ def create_clips_from_segments(
                 keep_ranges = build_clip_keep_ranges(
                     video_path, start_seconds, end_seconds, cleanup_settings
                 )
-            keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
+            if not segment.get("exact_end"):
+                # An explicit ending ends exactly where asked; extending to the
+                # next sentence would add words the caller chose to leave out.
+                keep_ranges = extend_keep_ranges_to_sentence_boundary(video_path, keep_ranges)
             clip_text = segment["text"]
             if not provided_keep_ranges and not provided_source_ranges:
                 keep_ranges = apply_segment_hook_teaser(video_path, keep_ranges, segment)

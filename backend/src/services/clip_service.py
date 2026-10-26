@@ -36,6 +36,7 @@ from ..clip_source_map import (
 
 from ..media_storage import MediaStorage, media_work
 from ..media.transcription import load_cached_transcript_data
+from ..media.clip_ending import apply_clip_ending
 from ..render_segments import segment_text, transcript_cache_payload
 from ..youtube_source import (
     load_time_map,
@@ -480,17 +481,23 @@ class ClipEditingMixin:
             metadata.get("remove_filler_words"),
             metadata.get("filtered_words"),
         )
+        def rendered_end(segment: Dict[str, Any]) -> float:
+            return segment["end"] + ((segment.get("ending") or {}).get("tail_s") or 0.0)
+
         render_requests = [
             {
                 "start_time": self._seconds_to_mmss(segment["start"]),
-                "end_time": self._seconds_to_mmss(segment["end"]),
+                "end_time": self._seconds_to_mmss(rendered_end(segment)),
                 # source_ranges (not keep_ranges): the task's pause and filler
                 # cleanup applies, as it does to SupoClip's own picks.
-                "source_ranges": [(segment["start"], segment["end"])],
+                "source_ranges": [(segment["start"], rendered_end(segment))],
                 "text": segment_text(transcript, segment["start"], segment["end"]),
                 "relevance_score": 0.5,
                 "reasoning": "Rendered from an explicit range",
                 "hook_title": segment.get("hook_title"),
+                # With an ending the clip stops exactly at end + tail: no
+                # extension into the next sentence (see video_utils).
+                **({"exact_end": True} if segment.get("ending") else {}),
             }
             for segment in segments
         ]
@@ -542,16 +549,22 @@ class ClipEditingMixin:
                 cleanup_settings,
                 max_short_side=output_short_side,
                 # Ranges were chosen on sentence boundaries; leave room for the
-                # sentence extension instead of cutting the last word.
-                max_clip_seconds=max(segment["end"] - segment["start"] for segment in segments) + 5,
+                # sentence extension (or the ending tail) instead of cutting the last word.
+                max_clip_seconds=max(rendered_end(segment) - segment["start"] for segment in segments) + 5,
             )
-            if time_map:
-                for clip_info in clips_info:
-                    index = int(clip_info.get("clip_id") or 0) - 1
-                    if 0 <= index < len(render_requests):
-                        await run_in_thread(
-                            restore_clip_timeline, clip_info, time_map, render_requests[index]
-                        )
+            for clip_info in clips_info:
+                index = int(clip_info.get("clip_id") or 0) - 1
+                if not 0 <= index < len(render_requests):
+                    continue
+                if time_map:
+                    await run_in_thread(
+                        restore_clip_timeline, clip_info, time_map, render_requests[index]
+                    )
+                ending = segments[index].get("ending")
+                if ending:
+                    clip_info["duration"] = await run_in_thread(
+                        apply_clip_ending, Path(clip_info["path"]), ending["tail_s"], ending["hold_s"]
+                    )
         finally:
             if source_type in {"youtube", "twitch", "kick"}:
                 self._cleanup_source_video(video_path, source_type, source_url)
