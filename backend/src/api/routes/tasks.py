@@ -44,6 +44,7 @@ from ...font_registry import is_font_accessible
 from ...clip_duration import normalize_clip_length, requested_clip_length
 from ...clip_notes import normalize_clip_notes, validate_clip_notes
 from ...task_transcript import normalize_transcript_only, validate_transcript_only
+from ...render_segments import validate_render_segments
 from ...clip_cleanup import (
     new_task_cleanup_settings,
     normalize_clip_cleanup_settings,
@@ -742,6 +743,55 @@ async def get_task_transcript(
     except Exception as e:
         logger.error(f"Error retrieving transcript: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving transcript: {str(e)}")
+
+
+@router.post("/{task_id}/clips", status_code=202)
+async def render_task_clips(
+    task_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Queue explicit ranges ({start, end, hook_title} in seconds) as new clips of a transcribed task.
+
+    The task goes to "processing" and back to "completed" when the worker is done;
+    its progress_message says how many clips were rendered.
+    """
+    try:
+        payload = await _read_json_object(request)
+        task_service = TaskService(db)
+        task = await _require_task_owner(request, task_service, db, task_id)
+        if task.get("status") != "completed":
+            raise HTTPException(status_code=409, detail="Task must be completed before rendering clips")
+        if not await task_service.task_repo.get_task_transcript(db, task_id):
+            raise HTTPException(
+                status_code=409, detail="Task has no stored transcript; create it with transcript_only"
+            )
+        try:
+            segments = validate_render_segments(payload.get("segments"), task.get("source_duration_seconds"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+
+        reserved = await task_service.task_repo.update_task_status(
+            db, task_id, "processing", progress=0,
+            progress_message=f"Rendering {len(segments)} clips",
+            expected_statuses=["completed"],
+        )
+        if not reserved:
+            raise HTTPException(status_code=409, detail="Task is busy; try again when it is completed")
+        try:
+            job_id = await JobQueue.enqueue_job("render_task_segments", task_id, segments)
+        except Exception:
+            await task_service.task_repo.update_task_status(
+                db, task_id, "completed", progress=100,
+                progress_message="Could not queue the render. Please retry.",
+                expected_statuses=["processing"],
+            )
+            raise
+        return {"task_id": task_id, "job_id": job_id, "segments": len(segments)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error queueing clip render: {e}")
+        raise HTTPException(status_code=500, detail=f"Error queueing clip render: {str(e)}")
 
 
 @router.post("/{task_id}/share")

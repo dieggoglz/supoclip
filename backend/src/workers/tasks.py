@@ -135,6 +135,43 @@ async def process_video_task(
             raise
 
 
+RENDER_SEGMENTS_JOB_TIMEOUT_SECONDS = 1800
+
+
+async def render_task_segments(
+    ctx: Dict[str, Any], task_id: str, segments: list[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Render explicit ranges (POST /tasks/{id}/clips) as new clips of a transcribed task.
+
+    The route moved the task to "processing"; it always returns to "completed",
+    with the outcome in progress_message, so the task stays usable.
+    """
+    from ..database import AsyncSessionLocal
+    from ..services.task_service import TaskService
+
+    set_trace_id(f"render-{task_id}")
+    logger.info("Worker rendering %d segments for task %s", len(segments), task_id)
+    async with AsyncSessionLocal() as db:
+        task_service = TaskService(db)
+        try:
+            created = await task_service.render_segments(task_id, segments)
+        except Exception as exc:
+            logger.error("Rendering segments for task %s failed: %s", task_id, exc, exc_info=True)
+            await task_service.task_repo.update_task_status(
+                db, task_id, "completed", progress=100,
+                progress_message=f"Render failed: {exc}"[:500],
+                expected_statuses=["processing"],
+            )
+            return {"task_id": task_id, "rendered": 0, "requested": len(segments), "error": str(exc)}
+        await task_service.task_repo.update_task_status(
+            db, task_id, "completed", progress=100,
+            progress_message=f"Rendered {len(created)} of {len(segments)} clips",
+            expected_statuses=["processing"],
+        )
+    return {"task_id": task_id, "rendered": len(created), "requested": len(segments),
+            "clip_ids": [c["id"] for c in created]}
+
+
 async def _social_service(db):
     from ..runtime_settings import load_runtime_settings_cache
     from ..services.social_service import SocialService
@@ -231,6 +268,8 @@ class WorkerSettings:
         # Results are not kept so a finished job's id ("social:{post}:{attempt}")
         # frees up; a dead job's post is failed by the stale-publishing sweep.
         func(publish_social_post, timeout=PUBLISH_JOB_TIMEOUT_SECONDS, keep_result=0),
+        # One try: a retry after a partial render would append the same clips twice.
+        func(render_task_segments, timeout=RENDER_SEGMENTS_JOB_TIMEOUT_SECONDS, max_tries=1),
     ]
     queue_name = "supoclip_tasks"
     health_check_interval = 30

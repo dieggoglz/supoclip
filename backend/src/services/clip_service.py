@@ -34,13 +34,16 @@ from ..clip_source_map import (
     trim_source_ranges,
 )
 
-from ..media_storage import MediaStorage
+from ..media_storage import MediaStorage, media_work
+from ..media.transcription import load_cached_transcript_data
+from ..render_segments import segment_text, transcript_cache_payload
 from ..youtube_source import (
     load_time_map,
     local_ranges_for,
     localize_segment,
     ranges_from_segments,
     restore_clip_timeline,
+    shift_transcript,
 )
 from ..media.ffmpeg import cap_video_short_side
 from ..stream_source import download_stream_sections
@@ -437,6 +440,146 @@ class ClipEditingMixin:
 
         await self.clip_repo.reorder_task_clips(self.db, task_id)
         return {"message": "Clips merged successfully", "clip_id": first["id"]}
+
+
+    @media_work
+    async def render_segments(
+        self, task_id: str, segments: list[Dict[str, Any]]
+    ) -> list[Dict[str, Any]]:
+        """Render explicit source ranges as new clips appended to the task.
+
+        ``segments`` are validated ``{start, end, hook_title}`` in source seconds
+        (see render_segments.validate_render_segments). The task's stored
+        transcript supplies the clip text and, if the media cache was swept,
+        the subtitle sidecar. Styling and cleanup come from the task settings.
+
+        The route moves the task to "processing" before queueing, so this holds
+        the processing lock (not the edit lock, which refuses processing tasks).
+        """
+        async with self._processing_transaction(task_id):
+            return await self._render_segments(task_id, segments)
+
+    async def _render_segments(
+        self, task_id: str, segments: list[Dict[str, Any]]
+    ) -> list[Dict[str, Any]]:
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            raise ValueError("Task not found")
+        transcript = await self.task_repo.get_task_transcript(self.db, task_id)
+        if not transcript:
+            raise ValueError("Task has no stored transcript; create it with transcript_only")
+        source_url = task.get("source_url")
+        source_type = task.get("source_type")
+        if not source_url or not source_type:
+            raise ValueError("Task source URL is missing; cannot render clips")
+
+        metadata = await self._load_task_source_settings(task_id)
+        cleanup_settings = normalize_clip_cleanup_settings(
+            metadata.get("cut_long_pauses"),
+            metadata.get("pause_threshold_ms"),
+            metadata.get("remove_filler_words"),
+            metadata.get("filtered_words"),
+        )
+        render_requests = [
+            {
+                "start_time": self._seconds_to_mmss(segment["start"]),
+                "end_time": self._seconds_to_mmss(segment["end"]),
+                # source_ranges (not keep_ranges): the task's pause and filler
+                # cleanup applies, as it does to SupoClip's own picks.
+                "source_ranges": [(segment["start"], segment["end"])],
+                "text": segment_text(transcript, segment["start"], segment["end"]),
+                "relevance_score": 0.5,
+                "reasoning": "Rendered from an explicit range",
+                "hook_title": segment.get("hook_title"),
+            }
+            for segment in segments
+        ]
+
+        download_quality, output_short_side = await self._media_limits(task.get("user_id"))
+        if source_type == "youtube":
+            downloaded = await self.video_service.download_video(
+                source_url,
+                quality=download_quality,
+                task_id=task_id,
+                ranges=ranges_from_segments(render_requests),
+            )
+            if not downloaded:
+                raise ValueError("Failed to download source video for rendering")
+            video_path = Path(downloaded)
+        elif source_type in {"twitch", "kick"}:
+            video_path = await run_in_thread(
+                download_stream_sections, source_url, render_requests,
+                task.get("source_duration_seconds"), task_id,
+            )
+        else:
+            video_path = await run_in_thread(self.video_service.resolve_local_video_path, source_url)
+            if not video_path.exists():
+                raise ValueError("Source video file no longer exists")
+
+        try:
+            video_path = await self.video_service.prepare_source(video_path)
+            time_map = await run_in_thread(load_time_map, video_path)
+            if await run_in_thread(load_cached_transcript_data, video_path) is None:
+                payload = transcript_cache_payload(transcript)
+                if time_map:
+                    payload = shift_transcript(payload, time_map)
+                sidecar = video_path.with_suffix(".transcript_cache.json")
+                await run_in_thread(sidecar.write_text, json.dumps(payload), "utf-8")
+                logger.info("Rebuilt subtitle transcript for task %s from the stored transcript", task_id)
+            localized = [
+                localize_segment(segment, time_map) if time_map else segment
+                for segment in render_requests
+            ]
+            clips_info = await self.video_service.create_video_clips(
+                video_path,
+                localized,
+                task.get("font_family"),
+                task.get("font_size"),
+                task.get("font_color"),
+                task.get("caption_template") or "default",
+                metadata.get("output_format", "vertical"),
+                metadata.get("add_subtitles", True),
+                cleanup_settings,
+                max_short_side=output_short_side,
+                # Ranges were chosen on sentence boundaries; leave room for the
+                # sentence extension instead of cutting the last word.
+                max_clip_seconds=max(segment["end"] - segment["start"] for segment in segments) + 5,
+            )
+            if time_map:
+                for clip_info in clips_info:
+                    index = int(clip_info.get("clip_id") or 0) - 1
+                    if 0 <= index < len(render_requests):
+                        await run_in_thread(
+                            restore_clip_timeline, clip_info, time_map, render_requests[index]
+                        )
+        finally:
+            if source_type in {"youtube", "twitch", "kick"}:
+                self._cleanup_source_video(video_path, source_type, source_url)
+
+        existing = await self.clip_repo.get_clips_by_task(self.db, task_id)
+        next_order = max((int(c.get("clip_order") or 0) for c in existing), default=0) + 1
+        created = []
+        for offset, clip_info in enumerate(clips_info):
+            clip_id = await self.clip_repo.create_clip(
+                self.db,
+                task_id=task_id,
+                filename=clip_info["filename"],
+                file_path=clip_info["path"],
+                start_time=clip_info["start_time"],
+                end_time=clip_info["end_time"],
+                duration=clip_info["duration"],
+                text=clip_info.get("text") or "",
+                relevance_score=clip_info.get("relevance_score", 0.5),
+                reasoning=clip_info.get("reasoning") or "Rendered from an explicit range",
+                # A new order: create_clip replaces whatever already sits at an order.
+                clip_order=next_order + offset,
+                hook_title=clip_info.get("hook_title"),
+            )
+            created.append({"id": clip_id, **clip_info})
+        await self.task_repo.update_task_clips(
+            self.db, task_id, [c["id"] for c in existing] + [c["id"] for c in created]
+        )
+        return created
 
 
     @serialized_task_edit

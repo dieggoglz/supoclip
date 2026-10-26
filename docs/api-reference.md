@@ -196,6 +196,25 @@ source minutes. The flag is kept for resume.
 Needs the `task_transcripts` table (created by the API's startup migrations). Ship
 the API and worker together so the worker accepts the `transcript_only` job argument.
 
+### Rendering explicit ranges
+
+- `POST /{task_id}/clips` (202)
+  - Renders ranges chosen outside SupoClip's own analysis as new clips of a
+    transcribed task, with the task's framing, subtitles, caption style and
+    pause/filler cleanup. Clips are appended after the existing ones.
+  - Body: `{"segments": [{"start": 12.4, "end": 41.9, "hook_title": "Optional text"}]}`
+    with times in seconds of the source. `hook_title` is burned in exactly as given;
+    `null` or empty renders no title. 1–20 segments of 1–180 seconds each.
+  - 409 when the task is not `completed` or has no stored transcript (create it
+    with `transcript_only`); 422 for invalid segments (ends after the source,
+    `end <= start`, too long...); 403 for other users.
+  - The task goes to `processing` and back to `completed`; poll `GET /{task_id}`.
+    Its `progress_message` is `Rendered N of M clips` or `Render failed: …`, and the
+    new clips appear in `GET /{task_id}/clips`.
+
+The worker runs it as the `render_task_segments` job (one try, 30 min timeout):
+ship the API and worker together.
+
 ### Clip operations
 
 - `GET /{task_id}/clips`
