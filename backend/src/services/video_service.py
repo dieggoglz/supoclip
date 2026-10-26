@@ -568,10 +568,12 @@ class VideoService:
         performance_context: Optional[str] = None,
         clip_length: str = "auto",
         clip_notes: Optional[str] = None,
+        transcript_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
-        Returns dict with segments and clips info.
+        Returns dict with segments and clips info. With transcript_only it stops
+        after transcription and returns the timed transcript instead.
 
         progress_callback: Optional function to call with progress updates
                           Signature: async def callback(progress: int, message: str, status: str)
@@ -720,6 +722,16 @@ class VideoService:
             except Exception:
                 logger.warning("Source word timings retained locally for upload retry")
             await run_in_thread(persist_cache_sidecar, video_path)
+
+            if transcript_only:
+                return {
+                    "video_path": str(video_path),
+                    "transcript": transcript,
+                    "transcript_data": load_cached_transcript_data(video_path),
+                    "segments_to_render": [],
+                    "segments": [],
+                    "analysis_json": None,
+                }
 
             # Step 3: AI analysis
             if should_cancel and await should_cancel():

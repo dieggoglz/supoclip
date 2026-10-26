@@ -95,6 +95,35 @@ class TaskRepository:
             raise
 
     @staticmethod
+    async def save_task_transcript(db: AsyncSession, task_id: str, transcript: Dict[str, Any]) -> None:
+        try:
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO task_transcripts (task_id, transcript_json)
+                    VALUES (:task_id, CAST(:transcript AS JSONB))
+                    ON CONFLICT (task_id) DO UPDATE SET
+                        transcript_json = EXCLUDED.transcript_json,
+                        created_at = CURRENT_TIMESTAMP
+                    """
+                ),
+                {"task_id": task_id, "transcript": json.dumps(transcript)},
+            )
+            await commit_unless_editing(db)
+        except BaseException:
+            await db.rollback()
+            raise
+
+    @staticmethod
+    async def get_task_transcript(db: AsyncSession, task_id: str) -> Optional[Dict[str, Any]]:
+        result = await db.execute(
+            text("SELECT transcript_json FROM task_transcripts WHERE task_id = :task_id"),
+            {"task_id": task_id},
+        )
+        transcript = result.scalar_one_or_none()
+        return transcript if isinstance(transcript, dict) else None
+
+    @staticmethod
     async def load_source_metadata(db: AsyncSession, task_id: str) -> Dict[str, Any]:
         result = await db.execute(
             text("SELECT source_metadata FROM tasks WHERE id = :task_id"),

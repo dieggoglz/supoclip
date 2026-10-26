@@ -43,6 +43,7 @@ from ...stream_source import (
 from ...font_registry import is_font_accessible
 from ...clip_duration import normalize_clip_length, requested_clip_length
 from ...clip_notes import normalize_clip_notes, validate_clip_notes
+from ...task_transcript import normalize_transcript_only, validate_transcript_only
 from ...clip_cleanup import (
     new_task_cleanup_settings,
     normalize_clip_cleanup_settings,
@@ -468,6 +469,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
     try:
         clip_length = requested_clip_length(data)
         clip_notes = validate_clip_notes(data.get("clip_notes"))
+        transcript_only = validate_transcript_only(data.get("transcript_only"))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     cleanup_settings = new_task_cleanup_settings(data)
@@ -533,6 +535,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                             "processing_job_id": processing_job_id,
                             "clip_length": clip_length,
                             "clip_notes": clip_notes,
+                            "transcript_only": transcript_only,
                             **_stream_resolution_metadata(stream_metadata),
                         },
                         source_url=raw_source["url"],
@@ -563,6 +566,7 @@ async def _create_task(request: Request, db: AsyncSession, attempt: SourceAttemp
                     cleanup_settings,
                     clip_length,
                     clip_notes=clip_notes,
+                    transcript_only=transcript_only,
                     _job_id=processing_job_id,
                 )
 
@@ -716,6 +720,28 @@ async def get_task_clips(
     except Exception as e:
         logger.error(f"Error retrieving clips: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving clips: {str(e)}")
+
+
+@router.get("/{task_id}/transcript")
+async def get_task_transcript(
+    task_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Timed words and speaker turns of a transcript-only task (times in ms)."""
+    try:
+        task_service = TaskService(db)
+        await _require_task_reader(request, task_service, db, task_id)
+        transcript = await task_service.task_repo.get_task_transcript(db, task_id)
+
+        if not transcript:
+            raise HTTPException(status_code=404, detail="Transcript not available for this task")
+
+        return {"task_id": task_id, **transcript}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving transcript: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving transcript: {str(e)}")
 
 
 @router.post("/{task_id}/share")
@@ -1387,6 +1413,7 @@ async def resume_task(
                         cleanup_settings,
                         normalize_clip_length(metadata.get("clip_length")),
                         clip_notes=normalize_clip_notes(metadata.get("clip_notes")),
+                        transcript_only=normalize_transcript_only(metadata.get("transcript_only")),
                         _job_id=processing_job_id,
                     )
                 except Exception:

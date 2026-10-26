@@ -166,6 +166,36 @@ Deploy the `default_clip_length` user migration (through either migration runner
 before the frontend. Ship the API and worker together so the worker accepts the
 new optional job argument. No new environment variables are required.
 
+`transcript_only` (optional boolean, default `false`) downloads and transcribes
+the source, then stops: no AI analysis, no clips and no clips-ready email. The
+task completes with progress message `Transcript ready`, and the timed transcript
+is read with `GET /tasks/{task_id}/transcript`. Transcription is still billed in
+source minutes. The flag is kept for resume.
+
+```json
+{"source": {"url": "https://www.youtube.com/watch?v=VIDEO_ID"}, "transcript_only": true}
+```
+
+### Transcript
+
+- `GET /{task_id}/transcript`
+  - Timed transcript of a transcript-only task. Same access rules as `GET /{task_id}`
+    (other users get 403). 404 when the task does not exist or has no stored transcript.
+  - Times are milliseconds. `speaker` comes from AssemblyAI diarization (`A`, `B`, …)
+    and is `null` with Whisper.
+
+```json
+{
+  "task_id": "…",
+  "language_code": "en",
+  "words": [{"text": "Hello", "start": 0, "end": 400, "confidence": 0.98, "speaker": "A"}],
+  "utterances": [{"speaker": "A", "start": 0, "end": 900, "text": "Hello there."}]
+}
+```
+
+Needs the `task_transcripts` table (created by the API's startup migrations). Ship
+the API and worker together so the worker accepts the `transcript_only` job argument.
+
 ### Clip operations
 
 - `GET /{task_id}/clips`

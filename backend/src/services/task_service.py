@@ -34,6 +34,7 @@ from ..youtube_utils import cleanup_downloaded_files, extract_video_id
 from ..youtube_source import load_time_map, localize_segment, restore_clip_timeline, transcript_source_for
 from ..clip_cleanup import normalize_clip_cleanup_settings
 from ..clip_duration import clip_duration, validate_clip_length
+from ..task_transcript import build_task_transcript
 from ..ai import TRANSCRIPT_ANALYSIS_CACHE_VERSION
 from ..clip_source_map import load_clip_caption_settings
 from ..media_storage import MediaStorage, media_work
@@ -333,10 +334,12 @@ class TaskService(ClipEditingMixin):
         cleanup_settings: Optional[Dict[str, Any]] = None,
         clip_length: str = "auto",
         clip_notes: Optional[str] = None,
+        transcript_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
-        Returns processing results.
+        Returns processing results. A transcript-only task stops after
+        transcription and stores the timed transcript instead.
         """
         # Tracked so the downloaded source video can be cleaned up on both the
         # success and error paths; multi-GB YouTube downloads otherwise pile up
@@ -459,11 +462,18 @@ class TaskService(ClipEditingMixin):
                 performance_context=performance_context,
                 clip_length=clip_length,
                 clip_notes=clip_notes,
+                transcript_only=transcript_only,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3
             )
             video_path = Path(result["video_path"])
+
+            if transcript_only:
+                return await self._complete_transcript_only(
+                    task_id, cache_key, url, source_type, result, stage_timings,
+                    check_cancelled, progress_callback,
+                )
 
             normalized_cleanup_settings = normalize_clip_cleanup_settings(
                 **(cleanup_settings or {})
@@ -705,6 +715,60 @@ class TaskService(ClipEditingMixin):
                 # Also handles failures before process_video_complete returns a
                 # path (and therefore before the generic path cleanup can run).
                 await run_in_thread(cleanup_stream_task, task_id)
+
+    async def _complete_transcript_only(
+        self,
+        task_id: str,
+        cache_key: str,
+        url: str,
+        source_type: str,
+        result: Dict[str, Any],
+        stage_timings: Dict[str, float],
+        check_cancelled: Callable,
+        progress_callback: Optional[Callable],
+    ) -> Dict[str, Any]:
+        """Store the timed transcript and finish without analysis, clips or the clips-ready email."""
+        transcript = build_task_transcript(result.get("transcript_data"))
+        await self.cache_repo.upsert_cache(
+            self.db,
+            cache_key=cache_key,
+            source_url=url,
+            source_type=source_type,
+            video_path=MediaStorage().source_reference(url) if url.startswith("upload://s3/") else result.get("video_path"),
+            transcript_text=result.get("transcript"),
+            analysis_json=None,
+        )
+        await self.task_repo.save_task_transcript(self.db, task_id, transcript)
+
+        await check_cancelled()
+        completed = await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "completed",
+            progress=100,
+            progress_message="Transcript ready",
+            expected_statuses=["processing"],
+        )
+        if completed is False:
+            raise TaskCancelled()
+        if progress_callback:
+            await progress_callback(100, "Transcript ready", "completed")
+        await self.task_repo.update_task_runtime_metadata(
+            self.db,
+            task_id,
+            completed_at=datetime.utcnow(),
+            stage_timings_json=json.dumps(stage_timings),
+            error_code="",
+        )
+        logger.info(
+            "Task %s transcribed: %d words, no clips", task_id, len(transcript["words"])
+        )
+        return {
+            "task_id": task_id,
+            "clips_count": 0,
+            "transcript_only": True,
+            "words_count": len(transcript["words"]),
+        }
 
     async def _send_completion_notification_if_needed(
         self, *, task_id: str, clips_count: int

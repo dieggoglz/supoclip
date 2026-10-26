@@ -33,6 +33,7 @@ async def process_video_task(
     cleanup_settings: Dict[str, Any] | None = None,
     clip_length: str = "auto",
     clip_notes: Optional[str] = None,
+    transcript_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -102,6 +103,7 @@ async def process_video_task(
                 cleanup_settings=cleanup_settings,
                 clip_length=clip_length,
                 clip_notes=clip_notes,
+                transcript_only=transcript_only,
             )
 
             logger.info(f"Task {task_id} completed successfully")
