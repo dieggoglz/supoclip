@@ -269,8 +269,10 @@ def create_optimized_clip(
     hook_title: Optional[str] = None,
     extend_to_sentence: bool = True,
     layout_report: Optional[Dict[str, Any]] = None,
+    static_text: bool = False,
 ) -> bool:
-    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
+    """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
+    static_text: hook title for the whole clip without entrance, captions without per-word effects."""
     try:
         if keep_ranges:
             effective_keep_ranges = normalize_source_ranges(keep_ranges)
@@ -414,6 +416,7 @@ def create_optimized_clip(
                 hook_title=hook_title,
                 include_captions=add_subtitles,
                 position_y_override=caption_y,
+                static_text=static_text,
             ):
                 burn_ass_path = ass_path
                 fonts_dir = ass_fonts_dir(
@@ -545,6 +548,7 @@ def create_clips_from_segments(
                 hook_title=segment.get("hook_title"),
                 extend_to_sentence=False,
                 layout_report=layout_report,
+                static_text=bool(segment.get("static_text")),
             )
 
             if success:

@@ -24,6 +24,7 @@ from .common import (
     HOOK_TITLE_MIN_SECONDS,
     HOOK_TITLE_SECONDS,
     HOOK_TITLE_TOP_MARGIN_FRAC,
+    HOLD_FULL_TOP_MARGIN_FRAC,
     _EMOJI_SUPPORT_CACHE,
     logger,
 )
@@ -256,13 +257,15 @@ def build_hook_title_ass(
     font_name: str,
     caption_font_px: int,
     position_y: Optional[float] = None,
+    hold_full: bool = False,
 ) -> Tuple[str, List[str]]:
     """Build the (style_line, dialogue_events) for a burned-in hook title.
 
     The title sits in the top safe area (Alignment 8), styled off the caption
     template so it reads as part of the same design system: same font, an
     outline/backing for contrast, power words and numbers in the template's
-    highlight colour, and a quick fade+pop entrance.
+    highlight colour, and a quick fade+pop entrance. With ``hold_full`` it stays
+    up for the whole clip with no entrance (briefs that forbid animated text).
     """
     uppercase = bool(template.get("uppercase"))
     title_text = hook_title.upper() if uppercase else hook_title
@@ -299,7 +302,10 @@ def build_hook_title_ass(
     elif outline_px == 0:
         outline_px = max(2, hook_px // 16)  # always keep contrast on video
     shadow_px = max(2, hook_px // 20) if template.get("shadow") else 0
-    margin_v = max(48, int(video_height * HOOK_TITLE_TOP_MARGIN_FRAC))
+    # A title held for the whole clip sits a little lower, clear of the TikTok/Shorts
+    # top bar (feed tabs, search) that covers roughly the top tenth of the frame.
+    top_frac = HOLD_FULL_TOP_MARGIN_FRAC if hold_full else HOOK_TITLE_TOP_MARGIN_FRAC
+    margin_v = max(48, int(video_height * top_frac))
 
     style_line = (
         f"Style: Hook,{font_name},{hook_px},{primary},&H000000FF,{outline},{back_color},"
@@ -323,9 +329,12 @@ def build_hook_title_ass(
     if output_duration <= HOOK_TITLE_MIN_SECONDS:
         start, end = 0.0, max(0.5, output_duration)
     entrance = "\\fad(160,240)"
+    if hold_full:
+        # On screen from the first frame to the last, with no fade or pop.
+        start, end, entrance = 0.0, max(0.5, output_duration), ""
     if position_y is not None:
         entrance += f"\\an2\\pos({video_width // 2},{round(video_height * position_y)})"
-    if template.get("word_pop", True):
+    if template.get("word_pop", True) and not hold_full:
         entrance += "\\fscx90\\fscy90\\t(0,160,\\fscx100\\fscy100)"
     events = [
         f"Dialogue: 1,{ass_timestamp(start)},{ass_timestamp(end)},Hook,,0,0,0,,"
@@ -357,6 +366,7 @@ def build_assemblyai_ass_subtitles(
     center_y_override: Optional[int] = None,
     emphasis_indices: Optional[Iterable[int]] = None,
     wrap_lines: bool = False,
+    static_text: bool = False,
 ) -> bool:
     """Generate animated word-synced ASS subtitles from cached AssemblyAI words.
 
@@ -372,10 +382,17 @@ def build_assemblyai_ass_subtitles(
     ``center_y_override`` places the caption centre without the safe-area
     clamp, ``emphasis_indices`` replaces automatic emphasis with exactly those
     words, and ``wrap_lines`` lets libass wrap lines wider than the frame.
+
+    ``static_text`` is for briefs that forbid animated text: plain line-by-line
+    captions (no karaoke highlight, pop, emoji, word box or glow) and a hook
+    title held for the whole clip with no entrance.
     """
     transcript_data = load_cached_transcript_data(video_path)
 
     template = template_override or get_template(caption_template)
+    if static_text:
+        template = {**template, "animation": "none", "word_pop": False, "emoji": False,
+                    "word_box": False, "glow": False}
     effective_font_family = font_family or template["font_family"]
     effective_font_size = int(font_size) if font_size else int(template["font_size"])
     effective_font_color = font_color or template["font_color"]
@@ -481,6 +498,7 @@ def build_assemblyai_ass_subtitles(
             # An upper-third caption seam belongs to a reaction stack. Keep
             # the headline below the source subject, off the reactor's face.
             position_y=0.94 if position_y_override is not None and position_y_override < .4 else None,
+            hold_full=static_text,
         )
         hook_style_block = f"{hook_style_line}\n"
 

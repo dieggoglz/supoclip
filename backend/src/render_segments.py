@@ -24,7 +24,7 @@ def _seconds(value: Any) -> Optional[float]:
 
 
 def validate_render_segments(value: Any, source_duration_seconds: Optional[float]) -> List[Dict[str, Any]]:
-    """[{start, end, hook_title}] in source seconds. Raises ValueError with the first problem."""
+    """[{start, end, hook_title, ending?, static_text?}] in source seconds. Raises ValueError with the first problem."""
     if not isinstance(value, list) or not value:
         raise ValueError("segments must be a non-empty list")
     if len(value) > MAX_RENDER_SEGMENTS:
@@ -53,7 +53,15 @@ def validate_render_segments(value: Any, source_duration_seconds: Optional[float
         ending = _validate_ending(item.get("ending"), number)
         if ending and source_duration_seconds and end + ending["tail_s"] > source_duration_seconds + DURATION_TOLERANCE_SECONDS:
             raise ValueError(f"Segment {number}: end plus ending tail runs past the source video")
-        segments.append({"start": start, "end": end, "hook_title": hook_title, "ending": ending})
+        static_text = item.get("static_text", False)
+        if not isinstance(static_text, bool):
+            raise ValueError(f"Segment {number}: static_text must be true or false")
+        segment = {"start": start, "end": end, "hook_title": hook_title, "ending": ending}
+        if static_text:
+            # Brand briefs that forbid animated text: the hook title stays up for the whole
+            # clip with no entrance, and the captions render without per-word effects.
+            segment["static_text"] = True
+        segments.append(segment)
     return segments
 
 

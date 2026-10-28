@@ -351,3 +351,12 @@ def test_exact_end_skips_the_sentence_extension(tmp_path, monkeypatch):
     assert extended == []
     video_utils.create_clips_from_segments(source, [base], tmp_path)
     assert len(extended) == 1
+
+
+def test_static_text_is_optional_and_must_be_a_boolean():
+    segments = validate_render_segments(
+        [{"start": 0, "end": 10, "hook_title": "Title", "static_text": True}, {"start": 20, "end": 30}], 60
+    )
+    assert segments[0]["static_text"] is True and "static_text" not in segments[1]
+    with pytest.raises(ValueError, match="static_text"):
+        validate_render_segments([{"start": 0, "end": 10, "static_text": "yes"}], 60)

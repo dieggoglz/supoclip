@@ -213,3 +213,16 @@ def test_long_hook_title_shrinks_below_the_preferred_size():
     assert size < 64
     assert size == max(1, int(usable / (len(word) * 0.52)))
     assert word in events[0]
+
+
+def test_a_held_hook_title_covers_the_whole_clip_without_entrance():
+    template = {"font_color": "#FFFFFF", "stroke_color": "#000000", "stroke_width": 3, "word_pop": True}
+    style, events = build_hook_title_ass(
+        "He just raised $1.85B. What does he do with it?", template, 1080, 1920, 42.0, "Arial", 62,
+        hold_full=True,
+    )
+    assert events[0].startswith("Dialogue: 1,0:00:00.00,0:00:42.00,Hook")
+    assert r"\fad" not in events[0] and r"\t(" not in events[0]
+    assert int(style.split(",")[-2]) == int(1920 * 0.12)               # below the platforms' top bar
+    _, default_events = build_hook_title_ass("Same title", template, 1080, 1920, 42.0, "Arial", 62)
+    assert r"\fad" in default_events[0] and "0:00:04.00" in default_events[0]   # default unchanged

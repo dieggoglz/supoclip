@@ -294,3 +294,32 @@ def test_build_clip_signal_summary_surfaces_hook_and_audio_peak(monkeypatch, tmp
     assert "Wait what happened?" in summary
     assert "audio energy peak" in summary
     assert "question/hook" in summary
+
+
+def test_static_text_renders_plain_captions_and_a_held_title(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": ['
+        '{"text": "we", "start": 1000, "end": 1200, "confidence": 0.99},'
+        '{"text": "raised", "start": 1200, "end": 1600, "confidence": 0.99},'
+        '{"text": "money", "start": 1600, "end": 2000, "confidence": 0.99}],'
+        ' "utterances": [], "text": "we raised money"}',
+        encoding="utf-8",
+    )
+
+    def build(static_text):
+        ass_path = tmp_path / f"captions-{static_text}.ass"
+        assert video_utils.build_assemblyai_ass_subtitles(
+            video_path, clip_start=1.0, clip_end=2.0, video_width=1080, video_height=1920,
+            output_ass_path=ass_path, caption_template="default", keep_ranges=[(1.0, 2.0)],
+            hook_title="A plain headline", static_text=static_text,
+        )
+        return [line for line in ass_path.read_text(encoding="utf-8").splitlines() if line.startswith("Dialogue:")]
+
+    animated, static = build(False), build(True)
+    captions = [line for line in static if ",Default," in line]
+    assert len(captions) == 1                                   # one plain line, not one event per word
+    assert r"\t(" not in captions[0] and r"\fsc" not in captions[0]
+    title = next(line for line in static if ",Hook," in line)
+    assert title.startswith("Dialogue: 1,0:00:00.00,0:00:01.00,Hook") and r"\fad" not in title
+    assert len([line for line in animated if ",Default," in line]) == 3   # default karaoke unchanged

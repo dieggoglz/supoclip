@@ -112,6 +112,8 @@ HOOK_TITLE_SECONDS = 4.0
 HOOK_TITLE_MIN_SECONDS = 1.5
 
 HOOK_TITLE_TOP_MARGIN_FRAC = 0.07
+# Hook title held for the whole clip (static_text renders): below the platforms' top bar.
+HOLD_FULL_TOP_MARGIN_FRAC = 0.12
 
 ANALYSIS_SEGMENT_MIN_WORDS = 8
 

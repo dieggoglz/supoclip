@@ -498,6 +498,7 @@ class ClipEditingMixin:
                 # With an ending the clip stops exactly at end + tail: no
                 # extension into the next sentence (see video_utils).
                 **({"exact_end": True} if segment.get("ending") else {}),
+                **({"static_text": True} if segment.get("static_text") else {}),
             }
             for segment in segments
         ]
