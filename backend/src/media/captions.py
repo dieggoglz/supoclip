@@ -58,6 +58,32 @@ def get_subtitle_max_width(video_width: int) -> int:
     return max(200, video_width - (horizontal_padding * 2))
 
 
+# Average glyph advance as a share of the font size for the bold caption fonts;
+# capitals run wider. An estimate, kept on the generous side so a line fits.
+CAPTION_CHAR_WIDTH = 0.56
+CAPTION_CHAR_WIDTH_UPPER = 0.68
+
+
+def caption_chunk_starts(
+    words: List[str], max_words: int, max_width_px: int, font_px: int, uppercase: bool = False
+) -> List[int]:
+    """Indices where each caption chunk starts: a new chunk begins after max_words
+    words or before a word that would push the line past max_width_px. A single
+    word wider than the line still gets its own chunk."""
+    char_px = font_px * (CAPTION_CHAR_WIDTH_UPPER if uppercase else CAPTION_CHAR_WIDTH)
+    starts: List[int] = []
+    count, width = 0, 0.0
+    for index, word in enumerate(words):
+        word_px = len(word.strip()) * char_px
+        added = word_px if count == 0 else width + char_px + word_px
+        if count == 0 or count >= max_words or added > max_width_px:
+            starts.append(index)
+            count, width = 1, word_px
+        else:
+            count, width = count + 1, added
+    return starts
+
+
 def get_safe_vertical_position(
     video_height: int, text_height: int, position_y: float
 ) -> int:
@@ -582,9 +608,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     line_entrance = "\\fscx92\\fscy92\\t(0,140,\\fscx100\\fscy100)" if word_pop else ""
 
     events: List[str] = []
-    total = len(relevant_words)
-    for chunk_start in range(0, total, chunk_size):
-        chunk = relevant_words[chunk_start : chunk_start + chunk_size]
+    # Chunks hold at most max_words words and never run wider than the safe
+    # caption width: with a large font, four long words overflowed the frame
+    # edges (clipped on phones).
+    chunk_starts = caption_chunk_starts(
+        [str(word.get("text", "")) for word in relevant_words],
+        chunk_size,
+        get_subtitle_max_width(video_width) - 2 * style_bord,
+        font_px,
+        uppercase,
+    )
+    for chunk_start, chunk_stop in zip(chunk_starts, chunk_starts[1:] + [len(relevant_words)]):
+        chunk = relevant_words[chunk_start:chunk_stop]
         indices = list(range(chunk_start, chunk_start + len(chunk)))
         chunk_end = float(chunk[-1]["end"])
 

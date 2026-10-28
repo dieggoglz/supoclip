@@ -323,3 +323,33 @@ def test_static_text_renders_plain_captions_and_a_held_title(tmp_path):
     title = next(line for line in static if ",Hook," in line)
     assert title.startswith("Dialogue: 1,0:00:00.00,0:00:01.00,Hook") and r"\fad" not in title
     assert len([line for line in animated if ",Default," in line]) == 3   # default karaoke unchanged
+
+
+def test_caption_chunks_never_run_wider_than_the_frame():
+    from src.media.captions import caption_chunk_starts
+
+    words = "regular, whether it's restaurants, manufacturers and the like".split()
+    # 1080 px frame, 77 px font: four of these words (~48 chars) would be ~2000 px wide
+    starts = caption_chunk_starts(words, 4, 950, 77)
+    chunks = [words[a:b] for a, b in zip(starts, starts[1:] + [len(words)])]
+    assert all(len(" ".join(c)) * 77 * 0.56 <= 950 or len(c) == 1 for c in chunks)
+    assert caption_chunk_starts("a b c d e f".split(), 4, 10_000, 40) == [0, 4]   # short words: by count as before
+    assert caption_chunk_starts([], 4, 950, 77) == []
+
+
+def test_long_words_with_a_big_font_are_split_into_more_caption_lines(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    words = "regular, whether it's restaurants, manufacturers".split()
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {1000 + i * 400}, "end": {1350 + i * 400}, "confidence": 0.99}}'
+            for i, w in enumerate(words)) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=3.0, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        font_size=40, caption_template="podcast", keep_ranges=[(1.0, 3.0)], static_text=True,
+    )
+    captions = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
+    assert len(captions) >= 2                    # one 4-word chunk would have been one line off both edges
