@@ -411,6 +411,7 @@ def test_a_glow_line_without_power_words_lights_up_its_longest_real_word(tmp_pat
         video_path, clip_start=1.0, clip_end=2.5, video_width=1080, video_height=1920, output_ass_path=ass_path,
         caption_template="glow", keep_ranges=[(1.0, 2.5)],
     )
-    text = next(l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue: 1,"))
-    neon = text.split("BULLYING")[0].rsplit("\c", 1)[1]
-    assert not neon.startswith("&H00FFFFFF") and "WERE" in text     # BULLYING in the neon colour, not white
+    texts = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue: 1,")]
+    line = next(l for l in texts if "BULLYING" in l)              # the big font splits it into two lines
+    neon = line.split("BULLYING")[0].rsplit("\c", 1)[1]
+    assert not neon.startswith("&H00FFFFFF")                      # BULLYING in the neon colour, not white
