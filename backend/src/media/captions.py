@@ -607,6 +607,40 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # per-word reflow/vibration.
     line_entrance = "\\fscx92\\fscy92\\t(0,140,\\fscx100\\fscy100)" if word_pop else ""
 
+    # "glow" (the look of most podcast clip channels): white text with a soft
+    # dark halo instead of a hard outline, at most one emphasised word per line
+    # in a neon colour with a glow of that colour, and each line blurring in and
+    # out. Two layers per line: the blurred halo underneath, the sharp text on
+    # top. The neon colour is one per clip, picked from the template palette.
+    palette = [hex_to_ass_color(c) for c in (template.get("emphasis_palette") or [])] or [emphasis_color]
+    glow_color = palette[int(round(clip_start * 10)) % len(palette)]
+    halo_px = max(6, font_px // 7)
+
+    def glow_events(chunk: List[Dict[str, Any]], indices: List[int], start: float, end: float) -> List[str]:
+        marked = next((gj for gj in indices if enable_emphasis and gj in emphasis_idx), None)
+        duration_ms = max(1, int(round((end - start) * 1000)))
+        blur_out_ms = max(0, duration_ms - 110)
+        halo_spans, text_spans = [], []
+        for local_j, word in enumerate(chunk):
+            gj = indices[local_j]
+            disp = render_text(gj, word)
+            hot = gj == marked
+            halo_spans.append(
+                f"{{{font_tag}\\3c{glow_color if hot else '&H000000&'}\\3a{'&H40&' if hot else '&H6A&'}}}{disp}"
+            )
+            text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
+        position = f"\\pos({video_width // 2},{y_pos})"
+        halo_tags = f"{{{position}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0\\fad(110,110)}}"
+        text_tags = (
+            f"{{{position}\\bord0\\shad0\\blur5\\t(0,120,\\blur0)"
+            f"\\t({blur_out_ms},{duration_ms},\\blur5)\\fad(110,110)}}"
+        )
+        timing = f"{ass_timestamp(start)},{ass_timestamp(end)}"
+        return [
+            f"Dialogue: 0,{timing},Default,,0,0,0,,{halo_tags}{' '.join(halo_spans)}",
+            f"Dialogue: 1,{timing},Default,,0,0,0,,{text_tags}{' '.join(text_spans)}",
+        ]
+
     events: List[str] = []
     # Chunks hold at most max_words words and never run wider than the safe
     # caption width: with a large font, four long words overflowed the frame
@@ -650,6 +684,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end = chunk_end
             if end <= start:
                 end = start + 0.05
+            if animation == "glow":
+                events.extend(glow_events(chunk, indices, start, end))
+                continue
             spans = []
             for local_j, word in enumerate(chunk):
                 gj = indices[local_j]

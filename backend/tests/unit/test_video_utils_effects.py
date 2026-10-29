@@ -372,3 +372,26 @@ def test_the_clipper_template_shows_two_bold_uppercase_words_without_emojis(tmp_
     captions = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
     assert len(captions) == 3                                   # 6 words, 2 per line, one event per line ("pop")
     assert "WE" in captions[0] and "RAISED" in captions[0]
+
+
+def test_the_glow_template_draws_a_halo_layer_under_sharp_text_with_one_neon_word(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    words = ["you", "never", "make", "money", "doing", "that"]
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {1000 + i * 300}, "end": {1250 + i * 300}, "confidence": 0.99}}'
+            for i, w in enumerate(words)) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=3.0, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="glow", keep_ranges=[(1.0, 3.0)],
+    )
+    lines = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
+    halos = [l for l in lines if l.startswith("Dialogue: 0,")]
+    texts = [l for l in lines if l.startswith("Dialogue: 1,")]
+    assert len(halos) == len(texts) == 2                       # 6 words, up to 4 per line: 2 lines, 2 layers each
+    assert all(r"\1a&HFF&" in l and r"\blur" in l for l in halos)    # invisible fill, blurred border = halo
+    assert all(r"\t(0,120,\blur0)" in l for l in texts)              # each line blurs in
+    assert "MONEY" in texts[0] or "MONEY" in texts[1]

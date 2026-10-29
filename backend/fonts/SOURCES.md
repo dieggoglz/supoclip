@@ -58,3 +58,7 @@ wdth=100, opsz=36, slnt=0` with fontTools `varLib.instancer`, renamed to family
 "TikTok Sans" / style "Bold". libass renders a variable font's default instance,
 so captions need the static file to get real bold TikTok Sans.
 Source: https://fonts.google.com/specimen/TikTok+Sans (OFL).
+
+## Montserrat ExtraBold (29 Oct 2026)
+- Montserrat-ExtraBold.ttf: static weight for the "glow" caption template (libass picks weights from a variable font unreliably).
+- Source: https://raw.githubusercontent.com/JulietaUla/Montserrat/master/fonts/ttf/Montserrat-ExtraBold.ttf (The Montserrat Project Authors, SIL Open Font License 1.1).

@@ -16,7 +16,7 @@ templates keep working):
 
 from typing import Dict, Any, Literal
 
-AnimationType = Literal["none", "karaoke", "pop", "fade", "bounce"]
+AnimationType = Literal["none", "karaoke", "pop", "fade", "bounce", "glow"]
 
 CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "default": {
@@ -205,6 +205,34 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "glow": False,
         "max_words_per_line": 2,
         "position_y": 0.72,
+    },
+    # The look of most podcast clip channels (reference Shorts from Diego, 29 Oct
+    # 2026): Montserrat ExtraBold capitals, white with a soft dark halo (no hard
+    # outline), one neon word per line with a glow of its colour, lines blurring
+    # in and out, mid-frame. One palette colour per clip.
+    "glow": {
+        "name": "Glow",
+        "description": "Bold white captions with a soft halo and one neon glowing word per line",
+        "font_family": "Montserrat-ExtraBold",
+        "font_size": 30,
+        "font_color": "#FFFFFF",
+        "highlight_color": "#39FF14",
+        "emphasis_color": "#39FF14",
+        "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600", "#22E4FF"],
+        "stroke_color": None,
+        "stroke_width": 0,
+        "background": False,
+        "background_color": None,
+        "word_box": False,
+        "word_box_color": None,
+        "animation": "glow",
+        "word_pop": False,
+        "emoji": False,
+        "uppercase": True,
+        "shadow": False,
+        "glow": False,
+        "max_words_per_line": 4,
+        "position_y": 0.56,
     },
 }
 
