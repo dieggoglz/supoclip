@@ -353,3 +353,22 @@ def test_long_words_with_a_big_font_are_split_into_more_caption_lines(tmp_path):
     )
     captions = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
     assert len(captions) >= 2                    # one 4-word chunk would have been one line off both edges
+
+
+def test_the_clipper_template_shows_two_bold_uppercase_words_without_emojis(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    words = ["we", "raised", "fifty", "million", "dollars", "today"]
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {1000 + i * 300}, "end": {1250 + i * 300}, "confidence": 0.99}}'
+            for i, w in enumerate(words)) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=3.0, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="clipper", keep_ranges=[(1.0, 3.0)],
+    )
+    captions = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
+    assert len(captions) == 3                                   # 6 words, 2 per line, one event per line ("pop")
+    assert "WE" in captions[0] and "RAISED" in captions[0]

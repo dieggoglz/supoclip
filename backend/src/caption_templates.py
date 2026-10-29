@@ -180,6 +180,32 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "max_words_per_line": 5,
         "position_y": 0.80,
     },
+    # The look most podcast clippers post (seen on BILF Podcast clips, 29 Oct 2026):
+    # two big bold words at a time, white with a heavy outline, power words and
+    # numbers in red, no emojis, the whole line popping in once.
+    "clipper": {
+        "name": "Clipper",
+        "description": "Two big bold words at a time, white with red emphasis",
+        "font_family": "THEBOLDFONT",
+        "font_size": 38,
+        "font_color": "#FFFFFF",
+        "highlight_color": "#FF2D2D",
+        "emphasis_color": "#FF2D2D",
+        "stroke_color": "#000000",
+        "stroke_width": 5,
+        "background": False,
+        "background_color": None,
+        "word_box": False,
+        "word_box_color": None,
+        "animation": "pop",
+        "word_pop": True,
+        "emoji": False,
+        "uppercase": True,
+        "shadow": True,
+        "glow": False,
+        "max_words_per_line": 2,
+        "position_y": 0.72,
+    },
 }
 
 
