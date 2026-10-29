@@ -644,7 +644,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             disp = render_text(gj, word)
             hot = gj == marked
             halo_spans.append(
-                f"{{{font_tag}\\3c{glow_color if hot else '&H000000&'}\\3a{'&H40&' if hot else '&H6A&'}}}{disp}"
+                f"{{{font_tag}\\3c{glow_color if hot else '&H000000&'}\\3a{'&H70&' if hot else '&H6A&'}}}{disp}"
             )
             text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
         position = f"\\pos({video_width // 2},{y_pos})"

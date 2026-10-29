@@ -218,7 +218,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "font_color": "#FFFFFF",
         "highlight_color": "#39FF14",
         "emphasis_color": "#39FF14",
-        "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600", "#22E4FF"],
+        "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600"],  # no cyan: Diego, 29 Oct, hard to read
         "stroke_color": None,
         "stroke_width": 0,
         "background": False,
