@@ -389,10 +389,13 @@ def test_the_glow_template_draws_a_halo_layer_under_sharp_text_with_one_neon_wor
         caption_template="glow", keep_ranges=[(1.0, 3.0)],
     )
     lines = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
-    halos = [l for l in lines if l.startswith("Dialogue: 0,")]
+    under = [l for l in lines if l.startswith("Dialogue: 0,")]
     texts = [l for l in lines if l.startswith("Dialogue: 1,")]
-    assert len(halos) == len(texts) == 2                       # 6 words, up to 4 per line: 2 lines, 2 layers each
-    assert all(r"\1a&HFF&" in l and r"\blur" in l for l in halos)    # invisible fill, blurred border = halo
+    assert len(texts) == 2                                      # 6 words, up to 4 per line: 2 lines
+    halos = [l for l in under if r"\3c&H000000&" in l]
+    glows = [l for l in under if r"\3a&H88&" in l]
+    assert len(halos) == 2 and 1 <= len(glows) <= 2              # a dark halo per line, a glow where a word is neon
+    assert all(r"\1a&HFF&" in l and r"\blur" in l for l in under)    # invisible fill, blurred border
     assert all(r"\t(0,120,\blur0)" in l for l in texts)              # each line blurs in
     assert "MONEY" in texts[0] or "MONEY" in texts[1]
 

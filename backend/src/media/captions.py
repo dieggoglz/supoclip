@@ -638,27 +638,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             marked = max(content)[1] if content and max(content)[0] >= 4 else None
         duration_ms = max(1, int(round((end - start) * 1000)))
         blur_out_ms = max(0, duration_ms - 110)
-        halo_spans, text_spans = [], []
+        halo_spans, glow_spans, text_spans = [], [], []
         for local_j, word in enumerate(chunk):
             gj = indices[local_j]
             disp = render_text(gj, word)
             hot = gj == marked
             # Dark halo under every word, the neon one included: a halo of its own
-            # colour washed it out on light backgrounds (yellow on a white shop
-            # front, 29 Oct).
+            # colour alone washed it out on light backgrounds (yellow on a white
+            # shop front, 29 Oct). The neon glow goes on top of it, softer.
             halo_spans.append(f"{{{font_tag}\\3c&H000000&\\3a&H5A&}}{disp}")
+            glow_spans.append(
+                f"{{{font_tag}\\3c{glow_color}\\3a&H88&}}{disp}" if hot else f"{{{font_tag}\\3a&HFF&}}{disp}"
+            )
             text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
         position = f"\\pos({video_width // 2},{y_pos})"
         halo_tags = f"{{{position}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0\\fad(110,110)}}"
+        glow_px = max(4, halo_px * 2 // 3)
+        glow_tags = f"{{{position}\\1a&HFF&\\bord{glow_px}\\blur{glow_px}\\shad0\\fad(110,110)}}"
         text_tags = (
             f"{{{position}\\bord0\\shad0\\blur5\\t(0,120,\\blur0)"
             f"\\t({blur_out_ms},{duration_ms},\\blur5)\\fad(110,110)}}"
         )
         timing = f"{ass_timestamp(start)},{ass_timestamp(end)}"
-        return [
-            f"Dialogue: 0,{timing},Default,,0,0,0,,{halo_tags}{' '.join(halo_spans)}",
-            f"Dialogue: 1,{timing},Default,,0,0,0,,{text_tags}{' '.join(text_spans)}",
-        ]
+        events = [f"Dialogue: 0,{timing},Default,,0,0,0,,{halo_tags}{' '.join(halo_spans)}"]
+        if marked is not None:
+            # Same layer as the halo, after it: drawn above the dark halo, under the text
+            events.append(f"Dialogue: 0,{timing},Default,,0,0,0,,{glow_tags}{' '.join(glow_spans)}")
+        events.append(f"Dialogue: 1,{timing},Default,,0,0,0,,{text_tags}{' '.join(text_spans)}")
+        return events
 
     events: List[str] = []
     # Chunks hold at most max_words words and never run wider than the safe
