@@ -236,12 +236,29 @@ async def test_task_without_stored_transcript_cannot_render(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_render_holds_the_processing_lock(tmp_path, monkeypatch):
-    service, _, _ = render_service(tmp_path, monkeypatch)
-    locked = []
-    service._processing_transaction = lambda task_id: locked.append(task_id) or nullcontext()
+async def test_render_takes_the_processing_lock_to_read_and_to_store_but_not_while_rendering(tmp_path, monkeypatch):
+    service, render, _ = render_service(tmp_path, monkeypatch)
+    events = []
+
+    class Lock:
+        async def __aenter__(self):
+            events.append("lock")
+
+        async def __aexit__(self, *_):
+            events.append("unlock")
+            return False
+
+    service._processing_transaction = lambda task_id: Lock()
+    inner = service.video_service.create_video_clips
+
+    async def rendering(*args, **kwargs):
+        events.append("render")
+        return await inner(*args, **kwargs)
+
+    service.video_service.create_video_clips = rendering
     await service.render_segments("task", SEGMENTS)
-    assert locked == ["task"]
+    # A row lock held through a long render hit the 5-minute idle-in-transaction timeout (29 Oct)
+    assert events == ["lock", "unlock", "render", "lock", "unlock"]
 
 
 # ---------------------------------------------------------------- the worker job

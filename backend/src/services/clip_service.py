@@ -457,12 +457,19 @@ class ClipEditingMixin:
         The route moves the task to "processing" before queueing, so this holds
         the processing lock (not the edit lock, which refuses processing tasks).
         """
+        # Short transactions: read the task, render with no transaction open, then
+        # store the clips. Holding the processing row lock across the whole render
+        # tripped the 5-minute idle_in_transaction_session_timeout (database.py)
+        # whenever a render ran long, e.g. two at once (29 Oct): the clips were
+        # rendered and then lost.
         async with self._processing_transaction(task_id):
-            return await self._render_segments(task_id, segments)
+            plan = await self._render_plan(task_id, segments)
+        clips_info = await self._render_from_plan(task_id, segments, plan)
+        async with self._processing_transaction(task_id):
+            return await self._store_rendered_clips(task_id, clips_info)
 
-    async def _render_segments(
-        self, task_id: str, segments: list[Dict[str, Any]]
-    ) -> list[Dict[str, Any]]:
+    async def _render_plan(self, task_id: str, segments: list[Dict[str, Any]]) -> Dict[str, Any]:
+        """Everything the render needs from the database, read inside one short transaction."""
         task = await self.task_repo.get_task_by_id(self.db, task_id)
         if not task:
             raise ValueError("Task not found")
@@ -504,6 +511,24 @@ class ClipEditingMixin:
         ]
 
         download_quality, output_short_side = await self._media_limits(task.get("user_id"))
+        return {
+            "task": task, "transcript": transcript, "metadata": metadata, "cleanup_settings": cleanup_settings,
+            "render_requests": render_requests, "download_quality": download_quality,
+            "output_short_side": output_short_side,
+        }
+
+    async def _render_from_plan(
+        self, task_id: str, segments: list[Dict[str, Any]], plan: Dict[str, Any]
+    ) -> list[Dict[str, Any]]:
+        """Download and render, with no database transaction open."""
+        task, transcript, metadata = plan["task"], plan["transcript"], plan["metadata"]
+        cleanup_settings, render_requests = plan["cleanup_settings"], plan["render_requests"]
+        download_quality, output_short_side = plan["download_quality"], plan["output_short_side"]
+        source_url, source_type = task.get("source_url"), task.get("source_type")
+
+        def rendered_end(segment: Dict[str, Any]) -> float:
+            return segment["end"] + ((segment.get("ending") or {}).get("tail_s") or 0.0)
+
         if source_type == "youtube":
             downloaded = await self.video_service.download_video(
                 source_url,
@@ -569,7 +594,10 @@ class ClipEditingMixin:
         finally:
             if source_type in {"youtube", "twitch", "kick"}:
                 self._cleanup_source_video(video_path, source_type, source_url)
+        return clips_info
 
+    async def _store_rendered_clips(self, task_id: str, clips_info: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        """Append the rendered clips to the task, inside one short transaction."""
         existing = await self.clip_repo.get_clips_by_task(self.db, task_id)
         next_order = max((int(c.get("clip_order") or 0) for c in existing), default=0) + 1
         created = []
