@@ -213,6 +213,15 @@ def ass_fonts_dir(font_family: Optional[str]) -> Optional[Path]:
     return FONTS_DIR if FONTS_DIR.exists() else None
 
 
+# Words never picked as the neon word of a "glow" line when no power word or
+# number is there (normalized tokens).
+GLOW_FILLER = {
+    "about", "after", "again", "being", "because", "before", "could", "doesnt", "dont", "every", "going", "gonna",
+    "have", "just", "like", "maybe", "really", "should", "something", "that", "their", "there", "these", "thing",
+    "things", "this", "those", "very", "want", "wanna", "were", "what", "when", "where", "which", "while", "with",
+    "would", "your", "youre", "theyre", "thats", "its", "isnt", "know", "mean", "kind", "sort", "actually",
+}
+
 # Bundled font used when the chosen one lacks glyphs for the clip's text. Its
 # width is close to THEBOLDFONT's, so hook-title line wrapping still fits.
 GLYPH_FALLBACK_FONT = "TikTokSans-Bold"
@@ -618,6 +627,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     def glow_events(chunk: List[Dict[str, Any]], indices: List[int], start: float, end: float) -> List[str]:
         marked = next((gj for gj in indices if enable_emphasis and gj in emphasis_idx), None)
+        if marked is None and enable_emphasis and len(chunk) >= 2:
+            # Reference clips light up a word on almost every line: with no power
+            # word or number, take the line's longest word that is not filler.
+            content = [
+                (len(normalize_token(str(word.get("text", "")))), gj)
+                for gj, word in zip(indices, chunk)
+                if normalize_token(str(word.get("text", ""))) not in GLOW_FILLER
+            ]
+            marked = max(content)[1] if content and max(content)[0] >= 4 else None
         duration_ms = max(1, int(round((end - start) * 1000)))
         blur_out_ms = max(0, duration_ms - 110)
         halo_spans, text_spans = [], []

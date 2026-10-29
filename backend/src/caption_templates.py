@@ -214,7 +214,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name": "Glow",
         "description": "Bold white captions with a soft halo and one neon glowing word per line",
         "font_family": "Montserrat-ExtraBold",
-        "font_size": 30,
+        "font_size": 42,
         "font_color": "#FFFFFF",
         "highlight_color": "#39FF14",
         "emphasis_color": "#39FF14",

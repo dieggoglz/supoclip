@@ -395,3 +395,22 @@ def test_the_glow_template_draws_a_halo_layer_under_sharp_text_with_one_neon_wor
     assert all(r"\1a&HFF&" in l and r"\blur" in l for l in halos)    # invisible fill, blurred border = halo
     assert all(r"\t(0,120,\blur0)" in l for l in texts)              # each line blurs in
     assert "MONEY" in texts[0] or "MONEY" in texts[1]
+
+
+def test_a_glow_line_without_power_words_lights_up_its_longest_real_word(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    words = ["kids", "were", "bullying", "you"]
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {1000 + i * 300}, "end": {1250 + i * 300}, "confidence": 0.99}}'
+            for i, w in enumerate(words)) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=2.5, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="glow", keep_ranges=[(1.0, 2.5)],
+    )
+    text = next(l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue: 1,"))
+    neon = text.split("BULLYING")[0].rsplit("\c", 1)[1]
+    assert not neon.startswith("&H00FFFFFF") and "WERE" in text     # BULLYING in the neon colour, not white
