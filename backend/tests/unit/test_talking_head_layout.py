@@ -226,3 +226,15 @@ def test_a_held_hook_title_covers_the_whole_clip_without_entrance():
     assert int(style.split(",")[-2]) == int(1920 * 0.12)               # below the platforms' top bar
     _, default_events = build_hook_title_ass("Same title", template, 1080, 1920, 42.0, "Arial", 62)
     assert r"\fad" in default_events[0] and "0:00:04.00" in default_events[0]   # default unchanged
+
+
+def test_a_template_can_hold_a_bigger_boxed_headline_for_longer():
+    template = {"font_color": "#FFFFFF", "stroke_color": None, "stroke_width": 0, "hook_title_seconds": 7.0,
+                "hook_title_max_px": 104, "hook_title_box": "#000000D9", "hook_title_top": 0.10}
+    style, events = build_hook_title_ass("Kids bullied her", template, 1080, 1920, 30.0, "Montserrat", 81)
+    fields = style.split(",")
+    assert int(fields[2]) == 104 and fields[15] == "3"            # size cap raised, BorderStyle 3 = box
+    assert int(fields[-2]) == int(1920 * 0.10)
+    assert ",0:00:07.00,Hook" in events[0]                         # 7 s on screen
+    _, default = build_hook_title_ass("Kids bullied her", {"font_color": "#FFFFFF"}, 1080, 1920, 30.0, "Arial", 62)
+    assert ",0:00:04.00,Hook" in default[0]

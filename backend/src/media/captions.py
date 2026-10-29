@@ -316,7 +316,13 @@ def build_hook_title_ass(
     # before the spoken line. Long titles wrap to two lines, and a line that
     # still does not fit (a long compound word, or two long lines) shrinks
     # below the preferred size so it is not clipped at the frame edge.
-    base_px = min(96, max(caption_font_px + 8, int(round(caption_font_px * 1.35))))
+    # Optional template keys for a louder headline (the "glow" look, 29 Oct):
+    # hook_title_max_px (size cap), hook_title_box (backing box colour, with
+    # alpha), hook_title_seconds (time on screen) and hook_title_top (margin).
+    base_px = min(
+        int(template.get("hook_title_max_px") or 96),
+        max(caption_font_px + 8, int(round(caption_font_px * 1.35))),
+    )
     usable_width = video_width - 2 * max(48, int(video_width * HOOK_TITLE_TOP_MARGIN_FRAC))
     max_chars = max(10, int(usable_width / (base_px * 0.52)))
     lines = _balance_title_lines(title_text.split(), max_chars)
@@ -337,9 +343,17 @@ def build_hook_title_ass(
     elif outline_px == 0:
         outline_px = max(2, hook_px // 16)  # always keep contrast on video
     shadow_px = max(2, hook_px // 20) if template.get("shadow") else 0
+    if template.get("hook_title_box"):
+        # Opaque backing box (libass fills BorderStyle 3 with the outline colour)
+        border_style = 3
+        outline = hex_to_ass_color(template["hook_title_box"], "#000000CC")
+        outline_px, shadow_px = max(10, hook_px // 5), 0
     # A title held for the whole clip sits a little lower, clear of the TikTok/Shorts
     # top bar (feed tabs, search) that covers roughly the top tenth of the frame.
-    top_frac = HOLD_FULL_TOP_MARGIN_FRAC if hold_full else HOOK_TITLE_TOP_MARGIN_FRAC
+    top_frac = (
+        HOLD_FULL_TOP_MARGIN_FRAC if hold_full
+        else float(template.get("hook_title_top") or HOOK_TITLE_TOP_MARGIN_FRAC)
+    )
     margin_v = max(48, int(video_height * top_frac))
 
     style_line = (
@@ -360,7 +374,8 @@ def build_hook_title_ass(
     text = "\\N".join(rendered_lines)
 
     start = 0.12
-    end = min(HOOK_TITLE_SECONDS, max(HOOK_TITLE_MIN_SECONDS, output_duration - 0.25))
+    seconds_up = float(template.get("hook_title_seconds") or HOOK_TITLE_SECONDS)
+    end = min(seconds_up, max(HOOK_TITLE_MIN_SECONDS, output_duration - 0.25))
     if output_duration <= HOOK_TITLE_MIN_SECONDS:
         start, end = 0.0, max(0.5, output_duration)
     entrance = "\\fad(160,240)"

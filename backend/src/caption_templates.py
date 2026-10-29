@@ -233,6 +233,12 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "glow": False,
         "max_words_per_line": 4,
         "position_y": 0.56,
+        # A louder headline (Diego, 29 Oct): 7 s on screen, bigger, on a dark box,
+        # below the TikTok feed tabs
+        "hook_title_seconds": 7.0,
+        "hook_title_max_px": 104,
+        "hook_title_box": "#000000D9",
+        "hook_title_top": 0.10,
     },
 }
 
