@@ -643,9 +643,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             gj = indices[local_j]
             disp = render_text(gj, word)
             hot = gj == marked
-            halo_spans.append(
-                f"{{{font_tag}\\3c{glow_color if hot else '&H000000&'}\\3a{'&H70&' if hot else '&H6A&'}}}{disp}"
-            )
+            # Dark halo under every word, the neon one included: a halo of its own
+            # colour washed it out on light backgrounds (yellow on a white shop
+            # front, 29 Oct).
+            halo_spans.append(f"{{{font_tag}\\3c&H000000&\\3a&H5A&}}{disp}")
             text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
         position = f"\\pos({video_width // 2},{y_pos})"
         halo_tags = f"{{{position}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0\\fad(110,110)}}"
