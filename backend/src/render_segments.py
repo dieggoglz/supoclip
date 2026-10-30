@@ -24,7 +24,7 @@ def _seconds(value: Any) -> Optional[float]:
 
 
 def validate_render_segments(value: Any, source_duration_seconds: Optional[float]) -> List[Dict[str, Any]]:
-    """[{start, end, hook_title, ending?, static_text?}] in source seconds. Raises ValueError with the first problem."""
+    """[{start, end, hook_title, ending?, static_text?, inserts?}] in source seconds. Raises ValueError with the first problem."""
     if not isinstance(value, list) or not value:
         raise ValueError("segments must be a non-empty list")
     if len(value) > MAX_RENDER_SEGMENTS:
@@ -61,6 +61,12 @@ def validate_render_segments(value: Any, source_duration_seconds: Optional[float
             # Brand briefs that forbid animated text: the hook title stays up for the whole
             # clip with no entrance, and the captions render without per-word effects.
             segment["static_text"] = True
+        from .media.inserts import validate_inserts
+
+        clip_seconds = end - start + ((ending or {}).get("tail_s") or 0.0)
+        inserts = validate_inserts(item.get("inserts"), clip_seconds)
+        if inserts:
+            segment["inserts"] = inserts
         segments.append(segment)
     return segments
 

@@ -506,6 +506,7 @@ class ClipEditingMixin:
                 # extension into the next sentence (see video_utils).
                 **({"exact_end": True} if segment.get("ending") else {}),
                 **({"static_text": True} if segment.get("static_text") else {}),
+                **({"inserts": segment["inserts"]} if segment.get("inserts") else {}),
             }
             for segment in segments
         ]

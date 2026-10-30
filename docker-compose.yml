@@ -114,6 +114,7 @@ services:
       - ./backend/src:/app/src
       - uploads:/app/uploads
       - clips:/app/clips
+      - ../clip-ops/assets/inserts:/app/inserts:ro   # montaje de clip-ops
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
     environment:
@@ -289,6 +290,7 @@ services:
       - ./backend/src:/app/src
       - uploads:/app/uploads
       - clips:/app/clips
+      - ../clip-ops/assets/inserts:/app/inserts:ro   # montaje de clip-ops
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
     environment:

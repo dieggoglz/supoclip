@@ -270,9 +270,11 @@ def create_optimized_clip(
     extend_to_sentence: bool = True,
     layout_report: Optional[Dict[str, Any]] = None,
     static_text: bool = False,
+    inserts: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
-    static_text: hook title for the whole clip without entrance, captions without per-word effects."""
+    static_text: hook title for the whole clip without entrance, captions without per-word effects.
+    inserts: video over the clip and under the captions (media/inserts.py)."""
     try:
         if keep_ranges:
             effective_keep_ranges = normalize_source_ranges(keep_ranges)
@@ -423,11 +425,12 @@ def create_optimized_clip(
                     font_family or get_template(caption_template)["font_family"]
                 )
 
+            framed_path = temp_root / "framed.mp4" if inserts else final_clip_path
             framed_ok, _, _ = render_reframed_clip_ffmpeg(
                 source_clip_path,
-                final_clip_path,
+                framed_path,
                 reframe_format,
-                subtitle_ass_path=burn_ass_path,
+                subtitle_ass_path=None if inserts else burn_ass_path,
                 fonts_dir=fonts_dir,
                 speaker_turns=speaker_turns,
                 speaker_words=speaker_words,
@@ -435,6 +438,11 @@ def create_optimized_clip(
             )
             if not framed_ok:
                 raise RuntimeError("ffmpeg reframe render failed")
+            if inserts:
+                from .media.inserts import apply_inserts
+
+                if not apply_inserts(framed_path, final_clip_path, inserts, burn_ass_path, fonts_dir):
+                    raise RuntimeError("ffmpeg inserts render failed")
 
             shutil.move(str(final_clip_path), str(output_path))
             logger.info(f"Successfully created clip with ffmpeg: {output_path}")
@@ -549,6 +557,7 @@ def create_clips_from_segments(
                 extend_to_sentence=False,
                 layout_report=layout_report,
                 static_text=bool(segment.get("static_text")),
+                inserts=segment.get("inserts") or None,
             )
 
             if success:
