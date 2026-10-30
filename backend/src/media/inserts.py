@@ -14,7 +14,9 @@ from .ffmpeg import build_final_video_encode_args, run_ffmpeg_command, subtitles
 
 INSERTS_DIR = Path("/app/inserts")
 INSERT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(mp4|mov|webm)$")
-INSERT_KINDS = ("pantalla", "fundido")
+INSERT_KINDS = ("pantalla", "fundido", "cara")
+# "cara": the person being talked about, in a card under the captions and clear of the Shorts buttons and the label
+CARD_WIDTH, CARD_X, CARD_Y, CARD_FADE = 400, 60, 1090, 0.12
 MAX_INSERTS = 12
 MIN_INSERT_SECONDS = 0.2
 FILL = "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,setsar=1"
@@ -79,7 +81,16 @@ def build_inserts_filter(inserts: Sequence[Dict[str, Any]], subs: Optional[str])
     for n, insert in enumerate(inserts, 1):
         length = insert["end"] - insert["start"]
         trimmed = f"[{n}:v]trim=start={insert['from']:.3f}:duration={length:.3f},setpts=PTS-STARTPTS,{FILL},fps={OUTPUT_FPS}"
-        if insert["kind"] == "fundido":
+        if insert["kind"] == "cara":
+            fade_out = max(0.0, length - CARD_FADE)
+            chain.append(
+                f"[{n}:v]trim=start={insert['from']:.3f}:duration={length:.3f},setpts=PTS-STARTPTS,"
+                f"scale={CARD_WIDTH}:-2:flags=lanczos,setsar=1,fps={OUTPUT_FPS},format=yuva420p,"
+                f"fade=t=in:st=0:d={CARD_FADE}:alpha=1,fade=t=out:st={fade_out:.3f}:d={CARD_FADE}:alpha=1,"
+                f"setpts=PTS+{insert['start']:.3f}/TB[i{n}]"
+            )
+            chain.append(f"[{last}][i{n}]overlay=x={CARD_X}:y={CARD_Y}:eof_action=pass[c{n}]")
+        elif insert["kind"] == "fundido":
             # Black until its time and after it: the screen blend leaves the picture untouched there
             chain.append(
                 f"{trimmed},format=gbrp,tpad=start_duration={insert['start']:.3f}:start_mode=add:color=black"

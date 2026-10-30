@@ -52,6 +52,11 @@ def test_an_insert_lands_on_its_word_after_the_pauses_are_cut():
     assert [(i["file"], i["start"], i["end"]) for i in placed] == [("a.mp4", 11.0, 13.0)]   # b fell in the pause
 
 
+def test_a_face_card_sits_in_its_corner_for_its_time():
+    chain = build_inserts_filter([{"file": "d.mp4", "kind": "cara", "start": 2.0, "end": 4.0, "from": 0.0}], None)
+    assert "overlay=x=60:y=1090" in chain and "setpts=PTS+2.000/TB" in chain and "fade=t=out:st=1.880" in chain
+
+
 def test_the_filter_blends_or_cuts_and_burns_captions_last():
     chain = build_inserts_filter(
         [{"file": "r.mp4", "kind": "fundido", "start": 1.0, "end": 2.0, "from": 0.0},
