@@ -92,14 +92,29 @@ PHRASE_DETERMINERS = frozenset({"the", "a", "an", "my", "your", "his", "her", "t
 PHRASE_WEAK_ENDINGS = PHRASE_OPENERS | PHRASE_DETERMINERS | frozenset({"to", "of", "in", "on", "at", "for", "i", "with"})
 PHRASE_PAUSE_SECONDS = 0.25
 
+# Line movement of the "glow" template, measured on the reference Short
+MOTION_IN_MS = 130
+MOTION_OUT_MS = 100
+MOTION_STRETCH_X = 130
+MOTION_STRETCH_Y = 106
+MOTION_GHOST_SHIFT = 0.5        # how far the ghosts slide, as a share of the font size
+LINE_HOLD_GAP_SECONDS = 0.4     # a shorter silence keeps the line up until the next one
+LINE_OVERLAP_SECONDS = 0.04
+
 
 def caption_phrase_starts(
-    words: List[Dict[str, Any]], max_words: int, max_width_px: int, font_px: int, uppercase: bool = False
+    words: List[Dict[str, Any]],
+    max_words: int,
+    max_width_px: int,
+    font_px: int,
+    uppercase: bool = False,
+    char_width: Optional[float] = None,
 ) -> List[int]:
     """Indices where each caption line starts, cut as speech is: at punctuation, at
     a pause and before a new clause, so lines hold a varying number of words. Never
-    more than max_words words or wider than max_width_px. Word times in seconds."""
-    char_px = font_px * (CAPTION_CHAR_WIDTH_UPPER if uppercase else CAPTION_CHAR_WIDTH)
+    more than max_words words or wider than max_width_px. Word times in seconds.
+    char_width: the font's glyph advance as a share of its size, when it is known."""
+    char_px = font_px * (char_width or (CAPTION_CHAR_WIDTH_UPPER if uppercase else CAPTION_CHAR_WIDTH))
     texts = [str(word.get("text", "")).strip() for word in words]
     bare = [text.lower().strip(".,?!;:\"'") for text in texts]
     starts: List[int] = [0] if texts else []
@@ -716,6 +731,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
             text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
         position = f"\\pos({video_width // 2},{y_pos})"
+        # Reference Short (Diego, 30 Oct): a line arrives stretched sideways and pulls in
+        # to its size in about 130 ms, and leaves the same way.
+        stretch = (
+            f"\\fscx{MOTION_STRETCH_X}\\fscy{MOTION_STRETCH_Y}\\t(0,{MOTION_IN_MS},\\fscx100\\fscy100)"
+            f"\\t({max(MOTION_IN_MS, duration_ms - MOTION_OUT_MS)},{duration_ms},\\fscx{MOTION_STRETCH_X}\\fscy{MOTION_STRETCH_Y})"
+            if template.get("line_motion")
+            else ""
+        )
+        position += stretch
         halo_tags = f"{{{position}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0\\fad(110,110)}}"
         glow_px = max(4, halo_px * 2 // 3)
         glow_tags = f"{{{position}\\1a&HFF&\\bord{glow_px}\\blur{glow_px}\\shad0\\fad(110,110)}}"
@@ -729,6 +753,27 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Same layer as the halo, after it: drawn above the dark halo, under the text
             events.append(f"Dialogue: 0,{timing},Default,,0,0,0,,{glow_tags}{' '.join(glow_spans)}")
         events.append(f"Dialogue: 1,{timing},Default,,0,0,0,,{text_tags}{' '.join(text_spans)}")
+        if template.get("line_motion") and duration_ms >= MOTION_IN_MS + MOTION_OUT_MS:
+            # libass only blurs evenly: two ghosts sliding sideways make the smear of the reference
+            text = " ".join(text_spans)
+            centre_x = video_width // 2
+            shift = int(font_px * MOTION_GHOST_SHIFT)
+            scale_in = f"\\fscx{MOTION_STRETCH_X}\\fscy{MOTION_STRETCH_Y}\\t(0,{MOTION_IN_MS},\\fscx100\\fscy100)"
+            scale_out = f"\\t(0,{MOTION_OUT_MS},\\fscx{MOTION_STRETCH_X}\\fscy{MOTION_STRETCH_Y})"
+            enter_end = ass_timestamp(start + MOTION_IN_MS / 1000)
+            leave_start = ass_timestamp(end - MOTION_OUT_MS / 1000)
+            for side in (-1, 1):
+                x = centre_x + side * shift
+                events.append(
+                    f"Dialogue: 2,{ass_timestamp(start)},{enter_end},Default,,0,0,0,,"
+                    f"{{\\move({x},{y_pos},{centre_x},{y_pos},0,{MOTION_IN_MS})\\bord0\\shad0\\blur{blur_px}{scale_in}"
+                    f"\\alpha&H70&\\t(0,{MOTION_IN_MS},\\alpha&HFF&)}}{text}"
+                )
+                events.append(
+                    f"Dialogue: 2,{leave_start},{ass_timestamp(end)},Default,,0,0,0,,"
+                    f"{{\\move({centre_x},{y_pos},{x},{y_pos},0,{MOTION_OUT_MS})\\bord0\\shad0\\blur{blur_px}{scale_out}"
+                    f"\\alpha&HFF&\\t(0,{MOTION_OUT_MS},\\alpha&H70&)}}{text}"
+                )
         return events
 
     events: List[str] = []
@@ -737,7 +782,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # edges (clipped on phones).
     max_line_px = get_subtitle_max_width(video_width) - 2 * style_bord
     if template.get("phrase_chunks"):
-        chunk_starts = caption_phrase_starts(relevant_words, chunk_size, max_line_px, font_px, uppercase)
+        chunk_starts = caption_phrase_starts(
+            relevant_words, chunk_size, max_line_px, font_px, uppercase, template.get("caption_char_width")
+        )
     else:
         chunk_starts = caption_chunk_starts(
             [str(word.get("text", "")) for word in relevant_words], chunk_size, max_line_px, font_px, uppercase
@@ -775,6 +822,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if end <= start:
                 end = start + 0.05
             if animation == "glow":
+                if template.get("line_motion") and chunk_stop < len(relevant_words):
+                    next_start = float(relevant_words[chunk_stop]["start"])
+                    if end <= next_start <= end + LINE_HOLD_GAP_SECONDS:
+                        end = next_start + LINE_OVERLAP_SECONDS
                 events.extend(glow_events(chunk, indices, start, end, line_number))
                 continue
             spans = []

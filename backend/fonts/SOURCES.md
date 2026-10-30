@@ -62,3 +62,5 @@ Source: https://fonts.google.com/specimen/TikTok+Sans (OFL).
 ## Montserrat ExtraBold (29 Oct 2026)
 - Montserrat-ExtraBold.ttf: static weight for the "glow" caption template (libass picks weights from a variable font unreliably).
 - Source: https://raw.githubusercontent.com/JulietaUla/Montserrat/master/fonts/ttf/Montserrat-ExtraBold.ttf (The Montserrat Project Authors, SIL Open Font License 1.1).
+- Nunito-Black.ttf: static weight 900 for the "glow" caption template, the rounded look of the reference Short (Diego, 30 Oct).
+- Source: https://github.com/google/fonts/tree/main/ofl/nunito (The Nunito Project Authors, SIL Open Font License 1.1); instantiated at wght=900 with fontTools.

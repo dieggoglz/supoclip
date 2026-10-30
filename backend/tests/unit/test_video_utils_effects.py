@@ -478,3 +478,30 @@ def test_the_glow_template_changes_colour_every_line_and_lights_a_word_on_each(t
     used = [next(c for c in palette if c in line) for line in texts]
     assert all(a != b for a, b in zip(used, used[1:]))          # a new colour every line
     assert all(r"\blur9" in line for line in texts)            # a visible blur in and out
+
+
+def test_glow_lines_arrive_and_leave_stretched_with_a_sideways_smear_and_no_gap(tmp_path):
+    video_path = tmp_path / "source.mp4"
+    timed = [("Look", 1000, 1300), ("up.", 1320, 1600), ("Bro", 1700, 2000), ("got", 2020, 2300), ("guns.", 2320, 2800)]
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {s}, "end": {e}, "confidence": 0.99}}' for w, s, e in timed
+        ) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=3.0, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="glow", keep_ranges=[(1.0, 3.0)],
+    )
+    content = ass_path.read_text(encoding="utf-8")
+    assert "Nunito Black" in content.split("[Events]")[0]
+    lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+    texts = [l for l in lines if l.startswith("Dialogue: 1,")]
+    assert len(texts) == 2 and all(r"\fscx130" in l and r"\fscx100" in l for l in texts)
+    # the first line stays up until the second one has started: no empty flash
+    first_end = texts[0].split(",")[2]
+    second_start = texts[1].split(",")[1]
+    assert first_end > second_start
+    ghosts = [l for l in lines if l.startswith("Dialogue: 2,")]
+    assert len(ghosts) == 8 and all(r"\move(" in l and r"\alpha" in l for l in ghosts)   # 2 in + 2 out, per line

@@ -213,8 +213,8 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "glow": {
         "name": "Glow",
         "description": "Bold white captions with a soft halo and one neon glowing word per line",
-        "font_family": "Montserrat-ExtraBold",
-        "font_size": 42,
+        "font_family": "Nunito-Black",     # rounded, as in the reference Short (Diego, 30 Oct)
+        "font_size": 48,
         "font_color": "#FFFFFF",
         "highlight_color": "#39FF14",
         "emphasis_color": "#39FF14",
@@ -225,6 +225,8 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "color_per_line": True,
         "phrase_chunks": True,
         "line_blur_px": 9,
+        "line_motion": True,               # lines arrive and leave stretched, with a sideways smear
+        "caption_char_width": 0.62,        # Nunito Black capitals, measured
         "stroke_color": None,
         "stroke_width": 0,
         "background": False,
