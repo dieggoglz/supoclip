@@ -723,6 +723,21 @@ async def get_task_clips(
         raise HTTPException(status_code=500, detail=f"Error retrieving clips: {str(e)}")
 
 
+@router.get("/{task_id}/clips/{clip_id}/timeline")
+async def get_clip_timeline(
+    task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """The source ranges a clip plays and the crossfade at each cut, to place things on its final timeline."""
+    from ...media.ffmpeg import crossfade_fade_for_ranges
+    task_service = TaskService(db)
+    await _require_task_reader(request, task_service, db, task_id)
+    clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)
+    if not clip or str(clip.get("task_id")) != task_id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    ranges = await run_in_thread(task_service._get_clip_source_ranges, clip)
+    return {"source_ranges": ranges, "crossfade_seconds": crossfade_fade_for_ranges(ranges)}
+
+
 @router.get("/{task_id}/transcript")
 async def get_task_transcript(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)

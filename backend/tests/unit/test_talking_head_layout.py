@@ -308,7 +308,7 @@ def test_each_speaker_is_one_face_per_angle_so_a_laugh_does_not_move_the_frame()
 
 def test_the_main_person_holds_the_opening_even_while_the_host_asks():
     import numpy as np
-    from src.media.speaker_framing import active_face_segments, main_speaker, speaker_faces_by_angle
+    from src.media.speaker_framing import active_face_segments, main_speaker, protagonist_angles, speaker_faces_by_angle
 
     samples = [(i / 3.0, _faces(300, 1500)) for i in range(24)]
     motion = np.zeros((80, 34, 60), dtype=np.float32)
@@ -319,13 +319,18 @@ def test_the_main_person_holds_the_opening_even_while_the_host_asks():
     assert main_speaker(turns) == "GUEST"
     shot = (0.0, 8.0)
     known = speaker_faces_by_angle(analysis, [shot], turns, 607)
-    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, turns, 607, known, "GUEST")] == [(0.0, 8.0, 300)]
+    angles = protagonist_angles(analysis, [shot], turns, 607, known, "GUEST")
+    assert angles
+    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, turns, 607, known, "GUEST", angles)] == [(0.0, 8.0, 300)]
     # After the opening the frame follows the speaker again
     late = [{"start": 0.0, "end": 5.0, "speaker": "HOST"}, {"start": 5.0, "end": 8.0, "speaker": "GUEST"}]
-    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, late, 607, known, "GUEST")] == [
+    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, late, 607, known, "GUEST", angles)] == [
         (0.0, 3.0, 300), (3.0, 5.0, 1500), (5.0, 8.0, 300)]
-    # An angle that does not show them is left alone
-    assert [round(f["cx"]) for _, _, f in active_face_segments(analysis, shot, late, 607, known, "NOBODY")][0] == 1500
+    # The hosts' shot while the guest talks off camera: no mouth moves for them, so the frame stays on who asks
+    motion[20:] = 0
+    off = protagonist_angles(analysis, [shot], turns, 607, known, "GUEST")
+    assert off == set()
+    assert round(active_face_segments(analysis, shot, turns, 607, known, "GUEST", off)[0][2]["cx"]) == 1500
 
 
 def test_a_small_face_in_a_wide_shot_gets_closer_and_a_big_one_does_not():

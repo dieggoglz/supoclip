@@ -439,9 +439,13 @@ def create_optimized_clip(
             if not framed_ok:
                 raise RuntimeError("ffmpeg reframe render failed")
             if inserts:
-                from .media.inserts import apply_inserts
+                from .media.ffmpeg import crossfade_fade_for_ranges
+                from .media.inserts import apply_inserts, inserts_on_timeline
 
-                if not apply_inserts(framed_path, final_clip_path, inserts, burn_ass_path, fonts_dir):
+                placed = inserts_on_timeline(
+                    inserts, start_time, effective_keep_ranges, crossfade_fade_for_ranges(effective_keep_ranges)
+                )
+                if not apply_inserts(framed_path, final_clip_path, placed, burn_ass_path, fonts_dir):
                     raise RuntimeError("ffmpeg inserts render failed")
 
             shutil.move(str(final_clip_path), str(output_path))

@@ -7,7 +7,7 @@ black background vanishes (money falling over the speaker). Both need the same s
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .common import OUTPUT_FPS
 from .ffmpeg import build_final_video_encode_args, run_ffmpeg_command, subtitles_filter_fragment
@@ -16,6 +16,7 @@ INSERTS_DIR = Path("/app/inserts")
 INSERT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(mp4|mov|webm)$")
 INSERT_KINDS = ("pantalla", "fundido")
 MAX_INSERTS = 12
+MIN_INSERT_SECONDS = 0.2
 FILL = "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,setsar=1"
 
 
@@ -45,6 +46,30 @@ def validate_inserts(raw: Any, clip_seconds: float) -> List[Dict[str, Any]]:
     if any(a["end"] > b["start"] for a, b in zip(clean, clean[1:])):
         raise ValueError("inserts overlap")
     return clean
+
+
+def clip_time(seconds: float, start: float, ranges: Sequence[Tuple[float, float]], fade: float = 0.0) -> float:
+    """Where a moment of the uncut segment plays in the final clip, which lost its long pauses and shares `fade`
+    seconds at each cut. `seconds` counts from the segment's `start`; a moment in a removed pause goes to what follows."""
+    moment, elapsed = start + seconds, 0.0
+    for range_start, range_end in ranges:
+        if moment < range_end:
+            return elapsed + max(0.0, moment - range_start)
+        elapsed += range_end - range_start - fade
+    return elapsed + fade
+
+
+def inserts_on_timeline(
+    inserts: Sequence[Dict[str, Any]], start: float, ranges: Sequence[Tuple[float, float]], fade: float = 0.0
+) -> List[Dict[str, Any]]:
+    """Inserts come timed against the transcript, so they land on their word after the pauses are cut.
+    One left with nothing to cover is dropped."""
+    placed = []
+    for insert in inserts:
+        a, b = clip_time(insert["start"], start, ranges, fade), clip_time(insert["end"], start, ranges, fade)
+        if b - a >= MIN_INSERT_SECONDS:
+            placed.append({**insert, "start": a, "end": b})
+    return placed
 
 
 def build_inserts_filter(inserts: Sequence[Dict[str, Any]], subs: Optional[str]) -> str:

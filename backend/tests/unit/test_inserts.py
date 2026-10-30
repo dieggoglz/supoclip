@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.media.inserts import apply_inserts, build_inserts_filter, validate_inserts
+from src.media.inserts import apply_inserts, build_inserts_filter, clip_time, inserts_on_timeline, validate_inserts
 from src.render_segments import validate_render_segments
 
 
@@ -36,6 +36,20 @@ def test_a_segment_carries_its_inserts_and_measures_them_against_the_clip():
     assert seg["inserts"][0]["file"] == "a.mp4"
     with pytest.raises(ValueError):       # 100-110 is a 10 s clip: times are the clip's, not the source's
         validate_render_segments([{"start": 100, "end": 110, "inserts": [{"file": "a.mp4", "start": 50, "end": 51}]}], None)
+
+
+def test_an_insert_lands_on_its_word_after_the_pauses_are_cut():
+    # Segment from 100 s; 3 s of pause gone between 110 and 113
+    ranges = [(100.0, 110.0), (113.0, 120.0)]
+    assert clip_time(5, 100, ranges) == 5
+    assert clip_time(15, 100, ranges) == 12          # 115 in the source: 2 s after the cut
+    assert clip_time(11, 100, ranges) == 10          # inside the pause: what follows
+    assert clip_time(15, 100, ranges, 0.1) == pytest.approx(11.9)
+    assert clip_time(99, 100, ranges) == 17          # past the end
+    placed = inserts_on_timeline(
+        [{"file": "a.mp4", "start": 14.0, "end": 16.0}, {"file": "b.mp4", "start": 10.5, "end": 12.0}], 100, ranges
+    )
+    assert [(i["file"], i["start"], i["end"]) for i in placed] == [("a.mp4", 11.0, 13.0)]   # b fell in the pause
 
 
 def test_the_filter_blends_or_cuts_and_burns_captions_last():
