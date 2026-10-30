@@ -501,7 +501,7 @@ def test_glow_lines_cross_fade_with_a_shrink_and_a_blur_and_no_empty_gap(tmp_pat
     assert len(texts) == 2
     assert all(r"\fscx91" in l and r"\t(0,140,\fscx100\fscy100)" in l and r"\fad(140,140)" in l for l in texts)
     assert all(r"\shad5" in l for l in texts)                     # the hard shadow of the reference
-    assert not [l for l in lines if l.startswith("Dialogue: 2,")]    # no ghost copies
+    assert not [l for l in lines if r"\move(" in l]                  # no sliding copies
     # the old line is still fading out when the new one fades in
     assert texts[0].split(",")[2] > texts[1].split(",")[1]
 
@@ -529,3 +529,27 @@ def test_a_line_too_brief_to_read_joins_a_neighbour_when_they_fit():
     # if they do not fit, each keeps its own line
     assert len(lines(("one", 0, 0.1), ("two", 0.11, 0.2), ("three", 0.21, 0.3), ("four,", 0.31, 0.4),
                      ("five", 0.5, 0.6), ("six", 0.61, 0.7), ("seven", 0.71, 0.8), ("eight", 0.81, 0.9))) == 2
+
+
+def test_the_coloured_word_is_painted_in_bands_from_strong_to_pale_with_a_tinted_shadow(tmp_path):
+    from src.media.captions import GRADIENT_BANDS, ass_color_mix
+
+    assert ass_color_mix("&H00D23FFF&", (255, 255, 255), 0.5) == "&H00E89FFF&"
+    assert ass_color_mix("&H00FFFFFF&", (0, 0, 0), 1) == "&H00000000&"
+    video_path = tmp_path / "source.mp4"
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [{"text": "Met", "start": 1000, "end": 1500, "confidence": 0.99},'
+        '{"text": "Nicki?", "start": 1520, "end": 2200, "confidence": 0.99}], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=2.5, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="glow", keep_ranges=[(1.0, 2.5)],
+    )
+    lines = ass_path.read_text(encoding="utf-8").splitlines()
+    text = next(l for l in lines if l.startswith("Dialogue: 1,"))
+    assert r"\4c&H00" in text                                       # the tinted shadow
+    bands = [l for l in lines if l.startswith("Dialogue: 2,")]
+    assert len(bands) == GRADIENT_BANDS - 1 and all(r"\clip(0," in l and r"\1a&HFF&" in l for l in bands)
+    assert len({l.split(r"\1a&H00&\c")[1][:12] for l in bands}) == GRADIENT_BANDS - 1   # a paler colour on each band

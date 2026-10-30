@@ -101,6 +101,20 @@ LINE_LEAD_SECONDS = 0.05        # a line starts fading in just before its first 
 LINE_TAIL_SECONDS = 0.14        # and stays a moment after its last one
 LINE_HOLD_GAP_SECONDS = 0.6     # a shorter silence keeps the line up until the next one
 MIN_LINE_SECONDS = 0.5          # a shorter line is hard to read: it joins a neighbour if they fit
+# The coloured word of the reference: saturated at the top, paler at the bottom, with a
+# shadow in a dark shade of its colour. libass has no gradients: horizontal bands fake it.
+GRADIENT_BANDS = 8
+GRADIENT_BOTTOM_WHITE = 0.45    # how much white the bottom band mixes in
+GRADIENT_HEIGHT = 0.8           # height of the painted area, as a share of the font size
+SHADOW_SHADE = 0.3              # the word's colour kept in its shadow; the rest is black
+
+
+def ass_color_mix(color: str, rgb: Tuple[int, int, int], share: float) -> str:
+    """An ASS colour (&H00BBGGRR&) moved towards rgb by share (0-1)."""
+    digits = color.strip("&H")[-6:]
+    blue, green, red = int(digits[0:2], 16), int(digits[2:4], 16), int(digits[4:6], 16)
+    mix = lambda own, other: int(round(own + (other - own) * share))  # noqa: E731
+    return f"&H00{mix(blue, rgb[2]):02X}{mix(green, rgb[1]):02X}{mix(red, rgb[0]):02X}&"
 
 
 def caption_phrase_starts(
@@ -764,6 +778,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         blur_out_ms = max(0, duration_ms - 110)
         blur_px = int(template.get("line_blur_px", 5))
         halo_spans, glow_spans, text_spans = [], [], []
+        band_spans: List[Tuple[bool, str]] = []
         for local_j, word in enumerate(chunk):
             gj = indices[local_j]
             disp = render_text(gj, word)
@@ -775,7 +790,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             glow_spans.append(
                 f"{{{font_tag}\\3c{glow_color}\\3a&H88&}}{disp}" if hot else f"{{{font_tag}\\3a&HFF&}}{disp}"
             )
-            text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}}}{disp}")
+            tinted = f"\\4c{ass_color_mix(glow_color, (0, 0, 0), 1 - SHADOW_SHADE)}" if hot and template.get("gradient_word") else ""
+            text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}{tinted}}}{disp}")
+            band_spans.append((hot, disp))
         position = f"\\pos({video_width // 2},{y_pos})"
         motion = bool(template.get("line_motion"))
         fade_ms = min(MOTION_FADE_MS, duration_ms // 2) if motion else 110
@@ -801,6 +818,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # Same layer as the halo, after it: drawn above the dark halo, under the text
             events.append(f"Dialogue: 0,{timing},Default,,0,0,0,,{glow_tags}{' '.join(glow_spans)}")
         events.append(f"Dialogue: 1,{timing},Default,,0,0,0,,{text_tags}{' '.join(text_spans)}")
+        if template.get("gradient_word") and marked is not None:
+            # The bands repaint only the coloured word (the others stay in place, invisible)
+            band_px = font_px * GRADIENT_HEIGHT / GRADIENT_BANDS
+            top_y = y_pos - font_px * GRADIENT_HEIGHT / 2
+            band_tags = (
+                f"{position}\\bord0\\shad0\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
+                f"\\t({duration_ms - fade_ms},{duration_ms},\\blur{blur_px}){fade}"
+            )
+            for band in range(1, GRADIENT_BANDS):     # the first band is the base colour of the text layer
+                color = ass_color_mix(glow_color, (255, 255, 255), GRADIENT_BOTTOM_WHITE * band / (GRADIENT_BANDS - 1))
+                y1 = int(round(top_y + band * band_px))
+                y2 = video_height if band == GRADIENT_BANDS - 1 else int(round(top_y + (band + 1) * band_px))
+                spans = " ".join(
+                    f"{{{font_tag}\\1a&H00&\\c{color}}}{disp}" if hot else f"{{{font_tag}\\1a&HFF&}}{disp}"
+                    for hot, disp in band_spans
+                )
+                events.append(
+                    f"Dialogue: 2,{timing},Default,,0,0,0,,{{{band_tags}\\clip(0,{y1},{video_width},{y2})}}{spans}"
+                )
         return events
 
     events: List[str] = []
