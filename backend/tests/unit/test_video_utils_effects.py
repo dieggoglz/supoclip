@@ -418,3 +418,63 @@ def test_a_glow_line_without_power_words_lights_up_its_longest_real_word(tmp_pat
     line = next(l for l in texts if "BULLYING" in l)              # the big font splits it into two lines
     neon = line.split("BULLYING")[0].rsplit("\c", 1)[1]
     assert not neon.startswith("&H00FFFFFF")                      # BULLYING in the neon colour, not white
+
+
+def _timed(*items):
+    """(text, start, end) in seconds, as the caption builder gets them."""
+    return [{"text": t, "start": s, "end": e} for t, s, e in items]
+
+
+def test_phrase_lines_follow_speech_with_a_varying_number_of_words():
+    from src.media.captions import caption_phrase_starts
+
+    def lines(*texts, pause_after=()):
+        words, clock = [], 0.0
+        for i, text in enumerate(texts):
+            words.append({"text": text, "start": clock, "end": clock + 0.2})
+            clock += 0.2 + (0.4 if i in pause_after else 0.02)
+        starts = caption_phrase_starts(words, 4, 950, 77 // 2)
+        return [" ".join(texts[a:b]) for a, b in zip(starts, starts[1:] + [len(texts)])]
+
+    assert lines("Look", "up.", "Bro", "got", "the", "gun", "on", "me") == ["Look up.", "Bro got the gun", "on me"]
+    assert lines("Lou?", "I", "don't", "know", "why") == ["Lou?", "I don't know why"]      # punctuation
+    assert lines("somebody", "knock", "he", "looked", pause_after=(1,)) == ["somebody knock", "he looked"]    # pause
+    assert lines("but", "I", "rolled", "the", "window", "down") == ["but I rolled", "the window down"]     # determiner
+    assert lines("building", "a", "bomb", "in", "my", "bedroom") == ["building a bomb", "in my bedroom"]   # not "in / my"
+    assert lines("I", "said", "and", "he", "left") == ["I said", "and he left"]            # new clause
+    assert lines("one", "two", "three", "four", "five") == ["one two three four", "five"]  # never more than 4
+    assert lines("one", "two", "three", "to", "five") == ["one two three", "to five"]      # no dangling weak word
+    assert lines("a", "bomb", "in", "my", "bedroom") == ["a bomb", "in my bedroom"]        # every weak word moves
+    assert caption_phrase_starts([], 4, 950, 40) == []
+
+
+def test_phrase_lines_never_run_wider_than_the_frame():
+    from src.media.captions import caption_phrase_starts
+
+    words = _timed(*[(w, i * 0.3, i * 0.3 + 0.28) for i, w in enumerate(["extraordinarily", "uncomfortable", "conversations", "everywhere"])])
+    assert caption_phrase_starts(words, 4, 950, 77, uppercase=True) == [0, 1, 2, 3]
+
+
+def test_the_glow_template_changes_colour_every_line_and_lights_a_word_on_each(tmp_path):
+    from src.caption_templates import get_template
+    from src.media.captions import hex_to_ass_color
+
+    video_path = tmp_path / "source.mp4"
+    words = ["Look", "up.", "On", "me.", "Why?", "Bro", "got", "guns."]
+    video_path.with_suffix(".transcript_cache.json").write_text(
+        '{"version": 2, "words": [' + ",".join(
+            f'{{"text": "{w}", "start": {1000 + i * 300}, "end": {1250 + i * 300}, "confidence": 0.99}}'
+            for i, w in enumerate(words)) + '], "utterances": [], "text": ""}',
+        encoding="utf-8",
+    )
+    ass_path = tmp_path / "captions.ass"
+    assert video_utils.build_assemblyai_ass_subtitles(
+        video_path, clip_start=1.0, clip_end=3.5, video_width=1080, video_height=1920, output_ass_path=ass_path,
+        caption_template="glow", keep_ranges=[(1.0, 3.5)],
+    )
+    texts = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue: 1,")]
+    assert len(texts) == 4                                      # Look up. / On me. / Why? / Bro got guns.
+    palette = [hex_to_ass_color(c) for c in get_template("glow")["emphasis_palette"]]
+    used = [next(c for c in palette if c in line) for line in texts]
+    assert all(a != b for a, b in zip(used, used[1:]))          # a new colour every line
+    assert all(r"\blur9" in line for line in texts)            # a visible blur in and out

@@ -84,6 +84,45 @@ def caption_chunk_starts(
     return starts
 
 
+# Where a spoken phrase breaks. A clause opener starts a new line once the line
+# holds two words; a determiner once it holds three. A line never ends on a weak
+# word when it was cut only for length.
+PHRASE_OPENERS = frozenset({"and", "but", "so", "because", "cause", "then", "when", "if", "while", "who", "which", "or"})
+PHRASE_DETERMINERS = frozenset({"the", "a", "an", "my", "your", "his", "her", "their", "our", "this", "that"})
+PHRASE_WEAK_ENDINGS = PHRASE_OPENERS | PHRASE_DETERMINERS | frozenset({"to", "of", "in", "on", "at", "for", "i", "with"})
+PHRASE_PAUSE_SECONDS = 0.25
+
+
+def caption_phrase_starts(
+    words: List[Dict[str, Any]], max_words: int, max_width_px: int, font_px: int, uppercase: bool = False
+) -> List[int]:
+    """Indices where each caption line starts, cut as speech is: at punctuation, at
+    a pause and before a new clause, so lines hold a varying number of words. Never
+    more than max_words words or wider than max_width_px. Word times in seconds."""
+    char_px = font_px * (CAPTION_CHAR_WIDTH_UPPER if uppercase else CAPTION_CHAR_WIDTH)
+    texts = [str(word.get("text", "")).strip() for word in words]
+    bare = [text.lower().strip(".,?!;:\"'") for text in texts]
+    starts: List[int] = [0] if texts else []
+    for i in range(1, len(texts)):
+        count = i - starts[-1]
+        natural = (
+            texts[i - 1][-1:] in {".", ",", "?", "!", ";", ":"}
+            or float(words[i]["start"]) - float(words[i - 1]["end"]) >= PHRASE_PAUSE_SECONDS
+            or (count >= 2 and bare[i] in PHRASE_OPENERS)
+            or (count >= 3 and bare[i] in PHRASE_DETERMINERS and bare[i - 1] not in PHRASE_WEAK_ENDINGS)
+        )
+        width = sum(len(text) for text in texts[starts[-1] : i + 1]) * char_px + count * char_px
+        if natural:
+            starts.append(i)
+        elif count >= max_words or width > max_width_px:
+            # Cut for length: hand a dangling "the" or "and" over to the next line
+            cut = i
+            while cut - 1 > starts[-1] and bare[cut - 1] in PHRASE_WEAK_ENDINGS:
+                cut -= 1
+            starts.append(cut)
+    return starts
+
+
 def get_safe_vertical_position(
     video_height: int, text_height: int, position_y: float
 ) -> int:
@@ -637,12 +676,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # out. Two layers per line: the blurred halo underneath, the sharp text on
     # top. The neon colour is one per clip, picked from the template palette.
     palette = [hex_to_ass_color(c) for c in (template.get("emphasis_palette") or [])] or [emphasis_color]
-    glow_color = palette[int(round(clip_start * 10)) % len(palette)]
+    palette_start = int(round(clip_start * 10)) % len(palette)
+    clip_color = palette[palette_start]
     halo_px = max(6, font_px // 7)
 
-    def glow_events(chunk: List[Dict[str, Any]], indices: List[int], start: float, end: float) -> List[str]:
+    color_per_line = bool(template.get("color_per_line"))
+
+    def glow_events(
+        chunk: List[Dict[str, Any]], indices: List[int], start: float, end: float, line_number: int
+    ) -> List[str]:
+        # One colour per clip, or a new one every line (reference Short, Diego, 30 Oct)
+        glow_color = palette[(palette_start + line_number) % len(palette)] if color_per_line else clip_color
         marked = next((gj for gj in indices if enable_emphasis and gj in emphasis_idx), None)
-        if marked is None and enable_emphasis and len(chunk) >= 2:
+        if marked is None and enable_emphasis and (len(chunk) >= 2 or color_per_line):
             # Reference clips light up a word on almost every line: with no power
             # word or number, take the line's longest word that is not filler.
             content = [
@@ -651,8 +697,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if normalize_token(str(word.get("text", ""))) not in GLOW_FILLER
             ]
             marked = max(content)[1] if content and max(content)[0] >= 4 else None
+            if marked is None and color_per_line:
+                marked = indices[-1]      # every line carries its colour, as in the reference
         duration_ms = max(1, int(round((end - start) * 1000)))
         blur_out_ms = max(0, duration_ms - 110)
+        blur_px = int(template.get("line_blur_px", 5))
         halo_spans, glow_spans, text_spans = [], [], []
         for local_j, word in enumerate(chunk):
             gj = indices[local_j]
@@ -671,8 +720,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         glow_px = max(4, halo_px * 2 // 3)
         glow_tags = f"{{{position}\\1a&HFF&\\bord{glow_px}\\blur{glow_px}\\shad0\\fad(110,110)}}"
         text_tags = (
-            f"{{{position}\\bord0\\shad0\\blur5\\t(0,120,\\blur0)"
-            f"\\t({blur_out_ms},{duration_ms},\\blur5)\\fad(110,110)}}"
+            f"{{{position}\\bord0\\shad0\\blur{blur_px}\\t(0,120,\\blur0)"
+            f"\\t({blur_out_ms},{duration_ms},\\blur{blur_px})\\fad(110,110)}}"
         )
         timing = f"{ass_timestamp(start)},{ass_timestamp(end)}"
         events = [f"Dialogue: 0,{timing},Default,,0,0,0,,{halo_tags}{' '.join(halo_spans)}"]
@@ -686,14 +735,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # Chunks hold at most max_words words and never run wider than the safe
     # caption width: with a large font, four long words overflowed the frame
     # edges (clipped on phones).
-    chunk_starts = caption_chunk_starts(
-        [str(word.get("text", "")) for word in relevant_words],
-        chunk_size,
-        get_subtitle_max_width(video_width) - 2 * style_bord,
-        font_px,
-        uppercase,
-    )
-    for chunk_start, chunk_stop in zip(chunk_starts, chunk_starts[1:] + [len(relevant_words)]):
+    max_line_px = get_subtitle_max_width(video_width) - 2 * style_bord
+    if template.get("phrase_chunks"):
+        chunk_starts = caption_phrase_starts(relevant_words, chunk_size, max_line_px, font_px, uppercase)
+    else:
+        chunk_starts = caption_chunk_starts(
+            [str(word.get("text", "")) for word in relevant_words], chunk_size, max_line_px, font_px, uppercase
+        )
+    for line_number, (chunk_start, chunk_stop) in enumerate(zip(chunk_starts, chunk_starts[1:] + [len(relevant_words)])):
         chunk = relevant_words[chunk_start:chunk_stop]
         indices = list(range(chunk_start, chunk_start + len(chunk)))
         chunk_end = float(chunk[-1]["end"])
@@ -726,7 +775,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if end <= start:
                 end = start + 0.05
             if animation == "glow":
-                events.extend(glow_events(chunk, indices, start, end))
+                events.extend(glow_events(chunk, indices, start, end, line_number))
                 continue
             spans = []
             for local_j, word in enumerate(chunk):

@@ -218,7 +218,13 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "font_color": "#FFFFFF",
         "highlight_color": "#39FF14",
         "emphasis_color": "#39FF14",
-        "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600"],  # no cyan: Diego, 29 Oct, hard to read
+        # No cyan: Diego, 29 Oct, hard to read. Red and orange from the reference Short
+        "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600", "#FF4D4D", "#FF9F1C"],
+        # Reference Short (Diego, 30 Oct): a new colour every line, lines cut by phrase
+        # (1-4 words) and a more visible blur in and out
+        "color_per_line": True,
+        "phrase_chunks": True,
+        "line_blur_px": 9,
         "stroke_color": None,
         "stroke_width": 0,
         "background": False,
