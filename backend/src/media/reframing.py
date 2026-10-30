@@ -1,5 +1,7 @@
 """Reframing helpers for the video pipeline."""
 
+import re
+from typing import Sequence
 from typing import Any
 from typing import Dict
 from typing import List
@@ -1170,7 +1172,15 @@ PEOPLE_FIT_REASONS = frozenset(
 INSERT_SAMPLES = 5
 INSERT_MIN_HEIGHT = 0.5         # of the frame
 INSERT_ASPECT = (0.4, 2.2)      # width / height: a vertical video, an article, a chart
-INSERT_FILL_ASPECT = 0.9        # narrower than this fills the screen; wider is shown whole
+INSERT_FILL_ASPECT = 0.7        # narrower than this fills the screen; wider is shown whole
+# What people say when they hold something up (Diego, 30 Oct: the words only, no vision yet).
+# Generic phrases such as "this is my" are left out: they say nothing about the picture.
+SHOW_CUES = (
+    "look at this", "look at that", "check this out", "let me show you", "i'll show you", "i can show you",
+    "see this", "on my phone", "this picture", "this photo", "this video",
+)
+SHOW_SECONDS = 4.0              # how long the frame stays open after the words
+SHOW_ASPECT = 0.75              # 3:4, as in the reference Shorts: a third wider than 9:16
 INSERT_MAX_WIDTH = 0.85         # of the frame: wider is the frame itself, not something pasted in it
 WIDE_SHOT_FACES = 2             # small faces seen together: a wide shot of people, not content
 WIDE_SHOT_FACE_RATE = 0.4
@@ -1201,6 +1211,25 @@ def find_portrait_rectangle(frame_bgr) -> Optional[Tuple[int, int, int, int]]:
     if h < height * INSERT_MIN_HEIGHT or not INSERT_ASPECT[0] <= w / h <= INSERT_ASPECT[1]:
         return None
     return left, top, w, h
+
+
+def find_show_moments(words: Sequence[Dict[str, Any]], duration: float) -> List[Tuple[float, float]]:
+    """Moments when someone says they are showing something, merged when they touch."""
+    texts = [re.sub(r"[^a-z' ]", "", str(w.get("text", "")).lower()).strip() for w in words]
+    moments: List[Tuple[float, float]] = []
+    for cue in SHOW_CUES:
+        parts = cue.split()
+        for i in range(len(texts) - len(parts) + 1):
+            if texts[i:i + len(parts)] == parts:
+                start = float(words[i]["start"])
+                moments.append((start, min(duration, start + SHOW_SECONDS)))
+    merged: List[Tuple[float, float]] = []
+    for a, b in sorted(moments):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
 
 
 def find_portrait_insert(input_path: Path, start: float, end: float) -> Optional[Tuple[int, int, int, int]]:
@@ -1418,6 +1447,23 @@ def describe_vertical_layout(
     def overlaps_pasted(shot: Dict[str, Any]) -> bool:
         return any(a < shot["end"] and shot["start"] < b for a, b, _ in pasted)
 
+    # When someone says they are showing something, open the frame around them
+    wide_views: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
+    wide_w = round_to_even(int(height * SHOW_ASPECT))
+    for a, b in find_show_moments(speaker_words or [], duration) if wide_w < width else []:
+        if any(pa < b and a < pb for pa, pb, _ in pasted):
+            continue
+        centres = [
+            x + w / 2
+            for t, faces in face_samples if faces and a <= t < b
+            for x, _, w, _ in [max(faces, key=lambda f: f[2] * f[3])]
+        ]
+        if not centres:
+            continue
+        x = clamp_even(int(np.median(centres) - wide_w / 2), 0, width - wide_w)
+        wide_views.append((a, b, (x, 0, wide_w, round_to_even(height))))
+        logger.info("Frame opened at %.1f-%.1f s: something is being shown", a, b)
+
     # Shots kept in full only for their people become crops of one person
     people_fits = [
         s for s in plan
@@ -1463,6 +1509,7 @@ def describe_vertical_layout(
         logger.info("Reaction layout: inset %s, %d source sections", reaction['inset'], len(reaction['source_runs']))
         return _described("reaction", reaction["video_filter"], "complex", reaction["caption_y"])
 
+    inserts = [*inserts, *wide_views]      # last: drawn above any zoom on the same moment
     if all(s["kind"] == "fit" for s in plan) and content_fits and not people_fits and not pasted:
         return _described("fit", build_full_frame_filter(), "complex", 0.80)
 
@@ -1486,7 +1533,7 @@ def describe_vertical_layout(
             )
             if active:
                 speaker_chain, zooms = active
-                inserts = [*inserts, *zooms]
+                inserts = [*inserts[:len(pasted)], *zooms, *wide_views]
         except Exception as exc:
             logger.warning("Active face framing failed (%s); tracking dominant face", exc)
     if not speaker_chain and not content_fits and speaker_words and (not talking or talking["kind"] == "stack"):
@@ -1505,13 +1552,15 @@ def describe_vertical_layout(
             speaker_plan = None
         if speaker_plan:
             speaker_filter, speaker_mode = speaker_plan
-            if not talking or speaker_mode == "complex":
+            if wide_views and speaker_mode == "vf":
+                speaker_chain = speaker_filter
+            elif not talking or speaker_mode == "complex":
                 # Overlap gets full-bleed panels even if the wide shot looks
                 # like a call. Put captions between the two faces.
                 caption_y = 0.5 if speaker_mode == "complex" else bleed_caption(face_samples)
                 kind = "overlap" if speaker_mode == "complex" else "speaker"
                 return _described(kind, speaker_filter, speaker_mode, caption_y)
-    if talking:
+    if talking and not wide_views:
         logger.info(
             "Face-aware vertical layout: %s (upscale %.2fx, caption_y %.2f)",
             talking["kind"], talking["upscale"], talking["caption_y"],
@@ -1561,8 +1610,8 @@ def describe_vertical_layout(
                 )
         return _described("crop", crop_chain, "vf", bleed_caption(face_samples))
 
-    # The person crop shows everywhere except over content and pasted rectangles
-    hidden = sorted([*content_only, *[(a, b) for a, b, _ in pasted]])
+    # The person crop shows everywhere except over content, pasted rectangles and open frames
+    hidden = sorted([*content_only, *[(a, b) for a, b, _ in pasted], *[(a, b) for a, b, _ in wide_views]])
     face_intervals: List[Tuple[float, float]] = []
     cursor = 0.0
     for a, b in hidden:

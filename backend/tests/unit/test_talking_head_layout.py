@@ -330,3 +330,18 @@ def test_a_pasted_article_is_shown_whole_and_a_vertical_video_fills_the_screen()
     full = np.zeros((1080, 1920, 3), dtype=np.uint8)
     cv2.rectangle(full, (20, 20), (1900, 1060), (255, 255, 255), 4)
     assert find_portrait_rectangle(full) is None
+
+
+def test_saying_you_show_something_opens_the_frame_for_a_few_seconds():
+    from src.media.reframing import build_vertical_compositor_filter, find_show_moments
+
+    def said(text, start=1.0):
+        return [{"text": w, "start": start + i * 0.3, "end": start + i * 0.3 + 0.25} for i, w in enumerate(text.split())]
+
+    assert find_show_moments(said("wait, Look at THIS."), 30.0) == [(1.3, 5.3)]
+    assert find_show_moments(said("this is my opinion on phones"), 30.0) == []    # generic: says nothing
+    assert find_show_moments(said("look at this", 28.0), 30.0) == [(28.0, 30.0)]  # ends with the clip
+    both = said("look at this") + said("check this out", 3.0)
+    assert find_show_moments(both, 30.0) == [(1.0, 7.0)]                          # touching moments join
+    chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [], inserts=[(2.0, 4.0, (500, 0, 810, 1080))])
+    assert "crop=810:1080:500:0,scale=1080:-2" in chain                           # 3:4, whole, over the blur
