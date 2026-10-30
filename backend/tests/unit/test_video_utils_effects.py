@@ -549,7 +549,8 @@ def test_the_coloured_word_is_painted_in_bands_from_strong_to_pale_with_a_tinted
     )
     lines = ass_path.read_text(encoding="utf-8").splitlines()
     text = next(l for l in lines if l.startswith("Dialogue: 1,"))
-    assert r"\4c&H00" in text                                       # the tinted shadow
+    assert text.count(r"\4c&H00") == 3                              # base, tinted word, and the plain one resets it
+    assert r"\4c&H00000000&" in text
     bands = [l for l in lines if l.startswith("Dialogue: 2,")]
     assert len(bands) == GRADIENT_BANDS - 1 and all(r"\clip(0," in l and r"\1a&HFF&" in l for l in bands)
     assert len({l.split(r"\3a&H00&\c")[1][:12] for l in bands}) == GRADIENT_BANDS - 1   # a paler colour on each band

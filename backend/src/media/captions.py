@@ -103,7 +103,7 @@ LINE_HOLD_GAP_SECONDS = 0.6     # a shorter silence keeps the line up until the 
 MIN_LINE_SECONDS = 0.5          # a shorter line is hard to read: it joins a neighbour if they fit
 # The coloured word of the reference: saturated at the top, paler at the bottom, with a
 # shadow in a dark shade of its colour. libass has no gradients: horizontal bands fake it.
-GRADIENT_BANDS = 8
+GRADIENT_BANDS = 16
 GRADIENT_BOTTOM_WHITE = 0.45    # how much white the bottom band mixes in
 GRADIENT_HEIGHT = 0.8           # height of the painted area, as a share of the font size
 SHADOW_SHADE = 0.3              # the word's colour kept in its shadow; the rest is black
@@ -168,7 +168,8 @@ def _template_measure(template: Dict[str, Any], font_px: int) -> Optional[Any]:
     if not widths:
         return None
     default = float(template.get("caption_char_width") or CAPTION_CHAR_WIDTH_UPPER)
-    return lambda text: sum(widths.get(char, default) for char in text) * font_px
+    spacing = int(template.get("text_weight_px", 0))     # the letters are spaced by the stroke's width
+    return lambda text: sum(widths.get(char, default) for char in text) * font_px + spacing * len(text)
 
 
 def _merge_short_lines(
@@ -790,7 +791,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             glow_spans.append(
                 f"{{{font_tag}\\3c{glow_color}\\3a&H88&}}{disp}" if hot else f"{{{font_tag}\\3a&HFF&}}{disp}"
             )
-            tinted = f"\\4c{ass_color_mix(glow_color, (0, 0, 0), 1 - SHADOW_SHADE)}" if hot and template.get("gradient_word") else ""
+            # Every word sets its shadow: an override would leak into the words after it
+            tinted = ""
+            if template.get("gradient_word"):
+                tinted = f"\\4c{ass_color_mix(glow_color, (0, 0, 0), 1 - SHADOW_SHADE) if hot else '&H00000000&'}"
             word_color = glow_color if hot else primary
             text_spans.append(f"{{{font_tag}\\c{word_color}\\3c{word_color}{tinted}}}{disp}")
             band_spans.append((hot, disp))
@@ -803,16 +807,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"\\t({duration_ms - fade_ms},{duration_ms},\\fscx{MOTION_SCALE}\\fscy{MOTION_SCALE})"
             )
         fade = f"\\fad({fade_ms},{fade_ms})"
-        halo_tags = f"{{{position}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0{fade}}}"
+        spacing = f"\\fsp{int(template.get('text_weight_px', 0))}" if template.get("text_weight_px") else ""
+        halo_tags = f"{{{position}{spacing}\\1a&HFF&\\bord{halo_px}\\blur{halo_px}\\shad0{fade}}}"
         glow_px = max(4, halo_px * 2 // 3)
-        glow_tags = f"{{{position}\\1a&HFF&\\bord{glow_px}\\blur{glow_px}\\shad0{fade}}}"
+        glow_tags = f"{{{position}{spacing}\\1a&HFF&\\bord{glow_px}\\blur{glow_px}\\shad0{fade}}}"
         # The hard dark shadow to the lower right of the reference
         shadow = f"\\shad{max(2, font_px // 16)}\\4c&H000000&\\4a&H28&" if motion else "\\shad0"
         blur_in_ms = fade_ms if motion else 120
         # A stroke in each word's own colour makes the letters heavier (Diego, 30 Oct)
         weight_px = int(template.get("text_weight_px", 0))
         text_tags = (
-            f"{{{position}\\bord{weight_px}{shadow}\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
+            f"{{{position}\\bord{weight_px}\\fsp{weight_px}{shadow}\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
             f"\\t({duration_ms - fade_ms if motion else blur_out_ms},{duration_ms},\\blur{blur_px}){fade}}}"
         )
         timing = f"{ass_timestamp(start)},{ass_timestamp(end)}"
@@ -826,7 +831,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             band_px = font_px * GRADIENT_HEIGHT / GRADIENT_BANDS
             top_y = y_pos - font_px * GRADIENT_HEIGHT / 2
             band_tags = (
-                f"{position}\\bord{weight_px}\\shad0\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
+                f"{position}\\bord{weight_px}\\fsp{weight_px}\\shad0\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
                 f"\\t({duration_ms - fade_ms},{duration_ms},\\blur{blur_px}){fade}"
             )
             for band in range(1, GRADIENT_BANDS):     # the first band is the base colour of the text layer
