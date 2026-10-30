@@ -1162,6 +1162,62 @@ def kenburns_zoom_fragment(duration: float) -> Optional[str]:
     )
 
 
+# Reasons a shot was kept in full because of its people, not because of what it shows.
+# Diego, 30 Oct: the person talking large, never a sudden horizontal strip.
+PEOPLE_FIT_REASONS = frozenset(
+    {"interaction_exceeds_crop", "subjects_spread_across_frame", "subject_exceeds_crop"}
+)
+INSERT_SAMPLES = 5
+INSERT_MIN_HEIGHT = 0.5         # of the frame
+INSERT_ASPECT = (0.4, 0.9)      # width / height of a vertical video
+INSERT_MIN_FILL = 0.85          # of its bounding box: a real rectangle
+
+
+def find_portrait_rectangle(frame_bgr) -> Optional[Tuple[int, int, int, int]]:
+    """(x, y, w, h) of a vertical video or image pasted inside the frame, or None.
+
+    Looks for long straight edges: a patterned backdrop breaks up contours, but
+    only the rectangle's own sides run along a whole column or row.
+    """
+    height, width = frame_bgr.shape[:2]
+    edges = cv2.Canny(cv2.GaussianBlur(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY), (3, 3), 0), 50, 150) > 0
+    # Two sides of the same rectangle: columns whose edge runs most of the frame's height
+    columns = np.where(edges.sum(axis=0) >= height * INSERT_MIN_HEIGHT)[0]
+    if len(columns) < 2:
+        return None
+    left, right = int(columns[0]), int(columns[-1])
+    w = right - left
+    if w < width * 0.1:
+        return None
+    rows = np.where(edges[:, left:right].sum(axis=1) >= w * INSERT_MIN_FILL)[0]
+    if len(rows) < 2:
+        return None
+    top, bottom = int(rows[0]), int(rows[-1])
+    h = bottom - top
+    if h < height * INSERT_MIN_HEIGHT or not INSERT_ASPECT[0] <= w / h <= INSERT_ASPECT[1]:
+        return None
+    return left, top, w, h
+
+
+def find_portrait_insert(input_path: Path, start: float, end: float) -> Optional[Tuple[int, int, int, int]]:
+    """The rectangle most samples of a shot agree on, slightly inset to lose its border."""
+    cap = cv2.VideoCapture(str(input_path))
+    found = []
+    try:
+        for step in range(INSERT_SAMPLES):
+            cap.set(cv2.CAP_PROP_POS_MSEC, (start + (end - start) * (step + 0.5) / INSERT_SAMPLES) * 1000)
+            ok, frame = cap.read()
+            if ok and (box := find_portrait_rectangle(frame)):
+                found.append(box)
+    finally:
+        cap.release()
+    if len(found) * 2 <= INSERT_SAMPLES:
+        return None
+    x, y, w, h = (int(np.median([box[i] for box in found])) for i in range(4))
+    inset = max(2, w // 100)
+    return (round_to_even(x + inset), round_to_even(y + inset), round_to_even(w - 2 * inset), round_to_even(h - 2 * inset))
+
+
 def build_full_frame_filter(blur_sigma: int = 14) -> str:
     """Preserve the complete source on a vertical canvas, without a crop branch."""
     return (
@@ -1179,6 +1235,7 @@ def build_vertical_compositor_filter(
     face_intervals: List[Tuple[float, float]],
     fit_intervals: List[Tuple[float, float]],
     blur_sigma: int = 14,
+    inserts: Optional[List[Tuple[float, float, Tuple[int, int, int, int]]]] = None,
 ) -> str:
     """filter_complex switching between a tracked face crop and a blurred-
     background full-frame fit over time. Produces a labelled [vout] stream.
@@ -1196,18 +1253,33 @@ def build_vertical_compositor_filter(
 
     face_en = enable_expr(face_intervals)
     fit_en = enable_expr(fit_intervals)
+    inserts = inserts or []
+    # A vertical video pasted in the frame fills the screen during its shot
+    insert_splits = "".join(f"[insrc{i}]" for i in range(len(inserts)))
+    insert_chains = "".join(
+        f"[insrc{i}]crop={w}:{h}:{x}:{y},scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop=1080:1920,setsar=1[ins{i}];"
+        for i, (_, _, (x, y, w, h)) in enumerate(inserts)
+    )
+    last, insert_overlays = "[t2]", ""
+    for i, (a, b, _) in enumerate(inserts):
+        next_label = "[vout]" if i == len(inserts) - 1 else f"[o{i}]"
+        insert_overlays += f";{last}[ins{i}]overlay=0:0:enable='between(t\\,{a:.3f}\\,{b:.3f})'{next_label}"
+        last = f"[o{i}]"
     # Smooth Gaussian background: blur at half resolution (plenty of detail for a
     # heavy blur) with multiple passes for a true Gaussian falloff, then upscale
     # 2x with bilinear so there's no lanczos ringing/blockiness — a creamy blur.
     return (
-        "[0:v]split=3[bgsrc][crsrc][ftsrc];"
+        f"[0:v]split={3 + len(inserts)}[bgsrc][crsrc][ftsrc]{insert_splits};"
+        f"{insert_chains}"
         "[bgsrc]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,"
         f"gblur=sigma={blur_sigma}:steps=2,scale=1080:1920:flags=bilinear,setsar=1[bg];"
         f"[crsrc]{crop_chain}[face];"
         "[ftsrc]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,"
         "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1[fit];"
         f"[bg][face]overlay=0:0:enable='{face_en}'[t1];"
-        f"[t1][fit]overlay=(W-w)/2:(H-h)/2:enable='{fit_en}'[vout]"
+        f"[t1][fit]overlay=(W-w)/2:(H-h)/2:enable='{fit_en}'{'[t2]' if inserts else '[vout]'}"
+        f"{insert_overlays}"
     )
 
 
@@ -1306,8 +1378,19 @@ def describe_vertical_layout(
     # shot keeps the full frame instead of a dominant-face crop.
     content_fits = [
         shot for shot in plan
-        if shot["kind"] == "fit" and shot.get("reason") != "interaction_exceeds_crop"
+        if shot["kind"] == "fit" and shot.get("reason") not in PEOPLE_FIT_REASONS
     ]
+    # Shots kept in full only for their people become crops of one person, and those
+    # without any person but holding a vertical video fill the screen with it.
+    people_fits = [s for s in plan if s["kind"] == "fit" and s.get("reason") in PEOPLE_FIT_REASONS]
+    inserts: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
+    for shot in content_fits:
+        box = find_portrait_insert(input_path, shot["start"], shot["end"])
+        if box:
+            inserts.append((shot["start"], shot["end"], box))
+            logger.info("Vertical insert %s at %.1f-%.1f s", box, shot["start"], shot["end"])
+    inserted = {start for start, _, _ in inserts}
+    content_only = [(s["start"], s["end"]) for s in content_fits if s["start"] not in inserted]
 
     # A persistent reaction inset is independent of fit intervals, camera cuts,
     # and speaker labels. Separate it before dominant-face tracking can confuse
@@ -1342,7 +1425,7 @@ def describe_vertical_layout(
         logger.info("Reaction layout: inset %s, %d source sections", reaction['inset'], len(reaction['source_runs']))
         return _described("reaction", reaction["video_filter"], "complex", reaction["caption_y"])
 
-    if all(s["kind"] == "fit" for s in plan) and content_fits:
+    if all(s["kind"] == "fit" for s in plan) and content_fits and not people_fits and not inserts:
         return _described("fit", build_full_frame_filter(), "complex", 0.80)
 
     # choose_talking_head_layout already refuses cut-heavy clips (more than
@@ -1351,7 +1434,19 @@ def describe_vertical_layout(
         choose_talking_head_layout(width, height, face_samples, scene_cuts)
         if not content_fits else None
     )
-    if not content_fits and speaker_words and (not talking or talking["kind"] == "stack"):
+    speaker_chain = None
+    if people_fits:
+        # Per shot and per turn: pooled speaker-to-face mappings break across camera angles
+        from .speaker_framing import build_active_face_chain
+
+        try:
+            speaker_chain = build_active_face_chain(
+                input_path, width, height, crop_w, crop_h, duration, speaker_turns or [],
+                [(s["start"], s["end"]) for s in people_fits],
+            )
+        except Exception as exc:
+            logger.warning("Active face framing failed (%s); tracking dominant face", exc)
+    if not speaker_chain and not content_fits and speaker_words and (not talking or talking["kind"] == "stack"):
         # Diarized speakers: cut to whoever is talking on multi-person wide
         # shots, including a pair that does not fit in one 9:16 crop. Slides
         # and other content shots keep the compositor below.
@@ -1381,15 +1476,18 @@ def describe_vertical_layout(
         return _described(
             talking["kind"], talking["video_filter"], "complex", talking["caption_y"]
         )
-    if all(s["kind"] == "fit" for s in plan):
+    if all(s["kind"] == "fit" for s in plan) and not track:
         return _described("fit", build_full_frame_filter(), "complex", 0.80)
 
     keys = build_crop_trajectory(track, width, crop_w) if track else []
     # A cut by itself is not camera motion. Ken Burns stays available unless
     # the face trajectory actually pans. Real pans still reset at each cut.
-    moving = bool(keys and trajectory_has_movement(keys, crop_w))
+    moving = bool(keys and trajectory_has_movement(keys, crop_w)) or bool(people_fits and scene_cuts and keys)
     static_x = 0
-    if moving:
+    if speaker_chain:
+        crop_chain = speaker_chain
+        moving = True
+    elif moving:
         x_expr = (
             build_scene_crop_expression(track, scene_cuts, duration, width, crop_w)
             if scene_cuts else build_smooth_pan_expression(keys)
@@ -1405,7 +1503,7 @@ def describe_vertical_layout(
             static_x = clamp_even(sx, 0, max(0, width - crop_w))
         crop_chain = f"crop={crop_w}:{crop_h}:{static_x}:0,{VERTICAL_SCALE_CHAIN}"
 
-    if not fit_intervals:
+    if not content_only and not inserts:
         # Static, all-face clip: add the slow Ken Burns punch-in. (The moving
         # tracked crop and the compositor path keep the plain chain — they
         # already have motion, and zoompan's re-timing would fight overlays.)
@@ -1420,14 +1518,17 @@ def describe_vertical_layout(
                 )
         return _described("crop", crop_chain, "vf", bleed_caption(face_samples))
 
-    face_intervals = [(s["start"], s["end"]) for s in plan if s["kind"] == "face"]
+    face_intervals = [
+        (s["start"], s["end"]) for s in plan
+        if s["kind"] == "face" or s.get("reason") in PEOPLE_FIT_REASONS
+    ]
     logger.info(
-        "Scene-aware vertical layout: %d face shot(s), %d content shot(s)",
-        len(face_intervals), len(fit_intervals),
+        "Scene-aware vertical layout: %d person shot(s), %d content shot(s), %d vertical insert(s)",
+        len(face_intervals), len(content_only), len(inserts),
     )
     return _described(
         "compositor",
-        build_vertical_compositor_filter(crop_chain, face_intervals, fit_intervals),
+        build_vertical_compositor_filter(crop_chain, face_intervals, content_only, inserts=inserts),
         "complex",
         bleed_caption(face_samples),
     )

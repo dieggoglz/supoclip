@@ -893,6 +893,87 @@ def build_stacked_overlap_filter(
     return ";".join(branches)
 
 
+def active_face_segments(
+    analysis: Dict[str, Any],
+    shot: Tuple[float, float],
+    turns: Sequence[Dict[str, Any]],
+    crop_w: int,
+) -> List[Tuple[float, float, Dict[str, float]]]:
+    """Inside one shot, (start, end, face) with the face whose mouth moves most in
+    each speaker turn. The frame only changes when the turn does. Empty when the
+    shot does not show two separate faces."""
+    start, end = shot
+    clusters = cluster_face_positions(analysis["face_samples"], [shot], crop_w)
+    if len(clusters) < 2:
+        return []
+    fps = analysis["motion_fps"]
+    series = [mouth_motion_series(analysis, cluster) for cluster in clusters]
+    # Speakers change at turn boundaries; a shot without labels counts as one turn
+    cuts = sorted({start, end, *(float(t["start"]) for t in turns if start < float(t["start"]) < end)})
+    segments: List[Tuple[float, float, Dict[str, float]]] = []
+    for a, b in zip(cuts, cuts[1:]):
+        i0, i1 = int(a * fps), max(int(a * fps) + 1, int(b * fps))
+        scores = [float(np.mean(s[i0:i1])) if len(s[i0:i1]) else 0.0 for s in series]
+        face = clusters[int(np.argmax(scores))]
+        if segments and segments[-1][2] is face:
+            segments[-1] = (segments[-1][0], b, face)
+        else:
+            segments.append((a, b, face))
+    return segments
+
+
+def build_active_face_chain(
+    input_path: Path,
+    width: int,
+    height: int,
+    crop_w: int,
+    crop_h: int,
+    duration: float,
+    turns: Sequence[Dict[str, Any]],
+    people_intervals: Sequence[Tuple[float, float]],
+) -> Optional[str]:
+    """Crop chain for a whole clip: shots with several people follow whoever is
+    talking, the rest their main face. None when the analysis is unavailable."""
+    analysis = analyze_speaker_clip(input_path, width, height)
+    if not analysis:
+        return None
+    face_samples = analysis["face_samples"]
+    max_x = max(0, width - crop_w)
+
+    def to_x(centre: float) -> int:
+        return clamp_even(int(centre - crop_w / 2), 0, max_x)
+
+    pieces: List[Tuple[float, float, float, float]] = []
+    last_x = max_x // 2
+    for shot in split_shots(analysis["scene_cuts"], duration):
+        middle = (shot[0] + shot[1]) / 2
+        segments: List[Tuple[float, float, Dict[str, float]]] = []
+        if any(a <= middle < b for a, b in people_intervals):
+            segments = active_face_segments(analysis, shot, turns, crop_w)
+        if segments:
+            for a, b, face in segments:
+                x = to_x(face["cx"])
+                pieces.append((a, b, float(x), float(x)))
+                last_x = x
+            continue
+        tracked = shot_trajectory_pieces(face_samples, shot, width, height, crop_w)
+        if tracked:
+            pieces.extend(tracked)
+            last_x = int(tracked[-1][3])
+            continue
+        centres = [
+            x + w / 2
+            for t, faces in face_samples if faces and shot[0] <= t < shot[1]
+            for x, _, w, _ in [max(faces, key=lambda f: f[2] * f[3])]
+        ]
+        x = to_x(float(np.median(centres))) if centres else last_x
+        pieces.append((shot[0], shot[1], float(x), float(x)))
+        last_x = x
+    if not pieces:
+        return None
+    return f"crop={crop_w}:{crop_h}:x='{build_crop_x_expression(pieces)}':y=0,{VERTICAL_SCALE_CHAIN}"
+
+
 def build_speaker_filter_plan(
     input_path: Path,
     width: int,

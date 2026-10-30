@@ -238,3 +238,49 @@ def test_a_template_can_hold_a_bigger_boxed_headline_for_longer():
     assert ",0:00:07.00,Hook" in events[0]                         # 7 s on screen
     _, default = build_hook_title_ass("Kids bullied her", {"font_color": "#FFFFFF"}, 1080, 1920, 30.0, "Arial", 62)
     assert ",0:00:04.00,Hook" in default[0]
+
+
+def _faces(*centres):
+    return [(c - 50, 100, 100, 100) for c in centres]
+
+
+def test_a_wide_shot_follows_the_mouth_that_moves_in_each_turn():
+    import numpy as np
+    from src.media.speaker_framing import active_face_segments
+
+    # Two faces at x=300 and x=1500; the left mouth moves for 2 s, then the right one
+    samples = [(i / 3.0, _faces(300, 1500)) for i in range(12)]
+    motion = np.zeros((40, 34, 60), dtype=np.float32)
+    motion[:20, :, 8:11] = 9.0      # cells around x=300 (cell = 32 px)
+    motion[20:, :, 45:48] = 9.0     # cells around x=1500
+    analysis = {"face_samples": samples, "motion": motion, "motion_fps": 10.0, "motion_cell": 32.0}
+    turns = [{"start": 0.0, "end": 2.0, "speaker": "A"}, {"start": 2.0, "end": 4.0, "speaker": "B"}]
+    segments = active_face_segments(analysis, (0.0, 4.0), turns, 607)
+    assert [(a, b, round(face["cx"])) for a, b, face in segments] == [(0.0, 2.0, 300), (2.0, 4.0, 1500)]
+    # the same mouth over two turns does not move the frame
+    motion[:] = 0
+    motion[:, :, 8:11] = 9.0
+    segments = active_face_segments(analysis, (0.0, 4.0), turns, 607)
+    assert [(a, b, round(face["cx"])) for a, b, face in segments] == [(0.0, 4.0, 300)]
+    # one face only: not this function's job
+    alone = dict(analysis, face_samples=[(i / 3.0, _faces(300)) for i in range(12)])
+    assert active_face_segments(alone, (0.0, 4.0), turns, 607) == []
+
+
+def test_a_vertical_video_pasted_in_the_frame_is_found_and_fills_the_screen():
+    import cv2
+    import numpy as np
+    from src.media.reframing import build_vertical_compositor_filter, find_portrait_rectangle
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    rng = np.random.default_rng(1)
+    for _ in range(300):                                   # a patterned backdrop
+        x, y = int(rng.integers(0, 1800)), int(rng.integers(0, 1000))
+        cv2.circle(frame, (x, y), 25, (90, 90, 90), 2)
+    cv2.rectangle(frame, (690, 70), (1225, 1010), (255, 255, 255), 6)
+    frame[76:1005, 696:1220] = (40, 60, 200)
+    x, y, w, h = find_portrait_rectangle(frame)
+    assert abs(x - 690) < 12 and abs(y - 70) < 12 and abs(w - 535) < 24 and abs(h - 940) < 24
+    assert find_portrait_rectangle(np.zeros((1080, 1920, 3), dtype=np.uint8)) is None
+    chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [], inserts=[(2.0, 4.0, (690, 70, 534, 940))])
+    assert "split=4" in chain and "crop=534:940:690:70" in chain and chain.endswith("[vout]")

@@ -248,7 +248,7 @@ def test_all_fit_context_with_corner_reactor_uses_reaction_layout():
     assert analyze.call_args.kwargs == {"proc_width": 960, "analyze_context": False}
 
 
-def test_calm_wide_two_shot_is_full_frame_when_speaker_framing_declines():
+def test_calm_wide_two_shot_crops_a_person_when_speaker_framing_declines():
     evidence = _wide_pair()
     assert context_reason(evidence[0], 0.316) == "interaction_exceeds_crop"
     track = [(s.time, 400.0, s.face_area) for s in evidence]
@@ -260,8 +260,8 @@ def test_calm_wide_two_shot_is_full_frame_when_speaker_framing_declines():
          patch("src.media.speaker_framing.build_speaker_filter_plan", return_value=None):
         graph, mode, caption_y = reframing.build_vertical_filter_plan(
             Path("two-shot.mp4"), 1920, 1080, turns, words)
-    assert (graph, mode, caption_y) == (reframing.build_full_frame_filter(), "complex", 0.80)
-    assert "crop=606:" not in graph
+    # Diego, 30 Oct: the person large, never a sudden horizontal strip
+    assert "crop=606:" in graph and "force_original_aspect_ratio=decrease" not in graph
 
 
 def test_calm_wide_two_shot_keeps_a_speaker_plan():
@@ -279,7 +279,7 @@ def test_calm_wide_two_shot_keeps_a_speaker_plan():
     assert (graph, mode) == speaker
 
 
-def test_wide_two_shot_interval_stays_full_frame_beside_a_closeup():
+def test_wide_two_shot_interval_is_a_person_crop_beside_a_closeup():
     close = [subject(i / 3) for i in range(15)]
     wide = _wide_pair(count=15, start=5)
     evidence = close + wide
@@ -291,11 +291,8 @@ def test_wide_two_shot_interval_stays_full_frame_beside_a_closeup():
          patch("src.media.speaker_framing.build_speaker_filter_plan", return_value=None):
         graph, mode, _ = reframing.build_vertical_filter_plan(
             Path("mixed.mp4"), 1920, 1080, [{"speaker": "A"}], words)
-    assert mode == "complex"
-    assert "[crsrc]" in graph
-    assert "between(t\\,0.000\\,5.000)" in graph
-    assert "between(t\\,5.000\\,10.000)" in graph
-    assert "force_original_aspect_ratio=decrease" in graph
+    assert "crop=606:" in graph
+    assert "force_original_aspect_ratio=decrease" not in graph
 
 
 def test_analyze_context_false_skips_flow_text_and_histograms():
