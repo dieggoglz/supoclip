@@ -306,6 +306,28 @@ def test_each_speaker_is_one_face_per_angle_so_a_laugh_does_not_move_the_frame()
         (0.0, 2.0, 300), (2.0, 4.0, 1500), (4.0, 6.0, 300)]
 
 
+def test_the_main_person_holds_the_opening_even_while_the_host_asks():
+    import numpy as np
+    from src.media.speaker_framing import active_face_segments, main_speaker, speaker_faces_by_angle
+
+    samples = [(i / 3.0, _faces(300, 1500)) for i in range(24)]
+    motion = np.zeros((80, 34, 60), dtype=np.float32)
+    motion[:20, :, 45:48] = 9.0     # the host, on the right, asks for 2 s
+    motion[20:, :, 8:11] = 9.0      # the guest, on the left, answers for 6 s
+    analysis = {"face_samples": samples, "motion": motion, "motion_fps": 10.0, "motion_cell": 32.0}
+    turns = [{"start": 0.0, "end": 2.0, "speaker": "HOST"}, {"start": 2.0, "end": 8.0, "speaker": "GUEST"}]
+    assert main_speaker(turns) == "GUEST"
+    shot = (0.0, 8.0)
+    known = speaker_faces_by_angle(analysis, [shot], turns, 607)
+    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, turns, 607, known, "GUEST")] == [(0.0, 8.0, 300)]
+    # After the opening the frame follows the speaker again
+    late = [{"start": 0.0, "end": 5.0, "speaker": "HOST"}, {"start": 5.0, "end": 8.0, "speaker": "GUEST"}]
+    assert [(a, b, round(face["cx"])) for a, b, face in active_face_segments(analysis, shot, late, 607, known, "GUEST")] == [
+        (0.0, 3.0, 300), (3.0, 5.0, 1500), (5.0, 8.0, 300)]
+    # An angle that does not show them is left alone
+    assert [round(f["cx"]) for _, _, f in active_face_segments(analysis, shot, late, 607, known, "NOBODY")][0] == 1500
+
+
 def test_a_small_face_in_a_wide_shot_gets_closer_and_a_big_one_does_not():
     from src.media.speaker_framing import zoom_box
 

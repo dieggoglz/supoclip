@@ -898,6 +898,7 @@ ACTIVE_FACE_TARGET = 0.2
 ACTIVE_FACE_MAX_ZOOM = 2.0
 ACTIVE_FACE_MIN_ZOOM = 1.1
 ACTIVE_FACE_EYE_LINE = 0.36     # where the face's centre sits in the zoomed frame, from the top
+OPENING_SECONDS = 3.0           # the clip's main person holds the frame this long when the shot shows them (Diego, 30 Oct)
 
 
 def camera_angle(clusters: Sequence[Dict[str, float]], crop_w: int) -> Tuple[int, ...]:
@@ -938,16 +939,28 @@ def speaker_faces_by_angle(
     }
 
 
+def main_speaker(turns: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """Who talks the longest in the clip: its protagonist, for the opening."""
+    totals: Dict[str, float] = {}
+    for turn in turns:
+        if turn.get("speaker") is not None:
+            speaker = str(turn["speaker"])
+            totals[speaker] = totals.get(speaker, 0.0) + float(turn["end"]) - float(turn["start"])
+    return max(totals, key=totals.get) if totals else None
+
+
 def active_face_segments(
     analysis: Dict[str, Any],
     shot: Tuple[float, float],
     turns: Sequence[Dict[str, Any]],
     crop_w: int,
     speaker_faces: Optional[Dict[Tuple[int, ...], Dict[str, float]]] = None,
+    protagonist: Optional[str] = None,
 ) -> List[Tuple[float, float, Dict[str, float]]]:
     """Inside one shot, (start, end, face) with the face of whoever holds each turn.
-    The frame only changes when the speaker does. Empty when the shot does not show
-    two separate faces."""
+    The frame only changes when the speaker does, except that the protagonist holds it
+    during the opening if this shot shows where they are. Empty when the shot does not
+    show two separate faces."""
     start, end = shot
     clusters = cluster_face_positions(analysis["face_samples"], [shot], crop_w)
     if len(clusters) < 2:
@@ -956,7 +969,10 @@ def active_face_segments(
     fps = analysis["motion_fps"]
     series = [mouth_motion_series(analysis, cluster) for cluster in clusters]
     # Speakers change at turn boundaries; a shot without labels counts as one turn
-    cuts = sorted({start, end, *(float(t["start"]) for t in turns if start < float(t["start"]) < end)})
+    cuts = {start, end, *(float(t["start"]) for t in turns if start < float(t["start"]) < end)}
+    if protagonist in known and start < OPENING_SECONDS < end:
+        cuts.add(OPENING_SECONDS)
+    cuts = sorted(cuts)
     segments: List[Tuple[float, float, Dict[str, float]]] = []
     for a, b in zip(cuts, cuts[1:]):
         speaker = next(
@@ -964,6 +980,8 @@ def active_face_segments(
              if t.get("speaker") is not None and float(t["start"]) <= (a + b) / 2 < float(t["end"])),
             None,
         )
+        if protagonist in known and a < OPENING_SECONDS:
+            speaker = protagonist
         if speaker in known:
             face = min(clusters, key=lambda c: abs(c["cx"] - known[speaker]))
         else:
@@ -1013,13 +1031,14 @@ def build_active_face_chain(
     shots = split_shots(analysis["scene_cuts"], duration)
     people_shots = [s for s in shots if any(a <= (s[0] + s[1]) / 2 < b for a, b in people_intervals)]
     speaker_faces = speaker_faces_by_angle(analysis, people_shots, turns, crop_w)
+    protagonist = main_speaker(turns)
     pieces: List[Tuple[float, float, float, float]] = []
     zooms: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
     last_x = max_x // 2
     for shot in shots:
         segments: List[Tuple[float, float, Dict[str, float]]] = []
         if shot in people_shots:
-            segments = active_face_segments(analysis, shot, turns, crop_w, speaker_faces)
+            segments = active_face_segments(analysis, shot, turns, crop_w, speaker_faces, protagonist)
         if segments:
             for a, b, face in segments:
                 x = to_x(face["cx"])
