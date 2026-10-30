@@ -284,3 +284,49 @@ def test_a_vertical_video_pasted_in_the_frame_is_found_and_fills_the_screen():
     assert find_portrait_rectangle(np.zeros((1080, 1920, 3), dtype=np.uint8)) is None
     chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [], inserts=[(2.0, 4.0, (690, 70, 534, 940))])
     assert "split=4" in chain and "crop=534:940:690:70" in chain and chain.endswith("[vout]")
+
+
+def test_each_speaker_is_one_face_per_angle_so_a_laugh_does_not_move_the_frame():
+    import numpy as np
+    from src.media.speaker_framing import active_face_segments, speaker_faces_by_angle
+
+    samples = [(i / 3.0, _faces(300, 1500)) for i in range(18)]
+    motion = np.zeros((60, 34, 60), dtype=np.float32)
+    motion[:20, :, 8:11] = 9.0      # A talks on the left for 2 s
+    motion[20:40, :, 45:48] = 9.0   # B talks on the right for 2 s
+    motion[40:60, :, 8:11] = 2.0    # A talks again, softly...
+    motion[40:60, :, 45:48] = 6.0   # ...while B laughs, moving more
+    analysis = {"face_samples": samples, "motion": motion, "motion_fps": 10.0, "motion_cell": 32.0}
+    turns = [{"start": 0.0, "end": 2.0, "speaker": "A"}, {"start": 2.0, "end": 4.0, "speaker": "B"},
+             {"start": 4.0, "end": 6.0, "speaker": "A"}]
+    shot = (0.0, 6.0)
+    known = speaker_faces_by_angle(analysis, [shot], turns, 607)
+    segments = active_face_segments(analysis, shot, turns, 607, known)
+    assert [(a, b, round(face["cx"])) for a, b, face in segments] == [
+        (0.0, 2.0, 300), (2.0, 4.0, 1500), (4.0, 6.0, 300)]
+
+
+def test_a_small_face_in_a_wide_shot_gets_closer_and_a_big_one_does_not():
+    from src.media.speaker_framing import zoom_box
+
+    x, y, w, h = zoom_box({"cx": 400.0, "cy": 500.0, "w": 110.0, "h": 110.0}, 1920, 1080, 606, 1080)
+    assert (w, h) == (308, 550)                                   # zoom limit                                   # zoom limit
+    assert x <= 400 <= x + w and y <= 500 <= y + h
+    assert zoom_box({"cx": 400.0, "cy": 300.0, "w": 300.0, "h": 300.0}, 1920, 1080, 606, 1080) is None
+
+
+def test_a_pasted_article_is_shown_whole_and_a_vertical_video_fills_the_screen():
+    import cv2
+    import numpy as np
+    from src.media.reframing import build_vertical_compositor_filter, find_portrait_rectangle
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (500, 60), (1500, 1020), (255, 255, 255), -1)     # an article, wider than tall
+    x, y, w, h = find_portrait_rectangle(frame)
+    assert abs(x - 500) < 12 and abs(w - 1000) < 24
+    chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [], inserts=[(2.0, 4.0, (500, 60, 1000, 960))])
+    assert "crop=1000:960:500:60,scale=1080:-2" in chain and "overlay=(W-w)/2:(H-h)/2" in chain
+    # a frame edge to edge is not something pasted in it
+    full = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    cv2.rectangle(full, (20, 20), (1900, 1060), (255, 255, 255), 4)
+    assert find_portrait_rectangle(full) is None

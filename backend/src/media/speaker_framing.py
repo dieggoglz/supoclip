@@ -893,33 +893,99 @@ def build_stacked_overlap_filter(
     return ";".join(branches)
 
 
+# A person in a wide shot is brought up to this share of the frame's height, within the zoom limit
+ACTIVE_FACE_TARGET = 0.2
+ACTIVE_FACE_MAX_ZOOM = 2.0
+ACTIVE_FACE_MIN_ZOOM = 1.1
+ACTIVE_FACE_EYE_LINE = 0.36     # where the face's centre sits in the zoomed frame, from the top
+
+
+def camera_angle(clusters: Sequence[Dict[str, float]], crop_w: int) -> Tuple[int, ...]:
+    """Shots of the same camera show their faces at about the same positions."""
+    return tuple(int(round(c["cx"] / (crop_w * 0.5))) for c in clusters)
+
+
+def speaker_faces_by_angle(
+    analysis: Dict[str, Any],
+    shots: Sequence[Tuple[float, float]],
+    turns: Sequence[Dict[str, Any]],
+    crop_w: int,
+) -> Dict[Tuple[int, ...], Dict[str, float]]:
+    """For each camera angle, the on-screen x of each speaker: the face whose mouth
+    moves most over ALL that speaker's turns, so a laugh during someone else's turn
+    cannot move the frame. Transcripts label speakers, not faces (Diego, 30 Oct)."""
+    fps = analysis["motion_fps"]
+    votes: Dict[Tuple[int, ...], Dict[str, Dict[int, float]]] = {}
+    positions: Dict[Tuple[int, ...], List[float]] = {}
+    for shot in shots:
+        clusters = cluster_face_positions(analysis["face_samples"], [shot], crop_w)
+        if len(clusters) < 2:
+            continue
+        angle = camera_angle(clusters, crop_w)
+        positions.setdefault(angle, [c["cx"] for c in clusters])
+        series = [mouth_motion_series(analysis, c) for c in clusters]
+        for turn in turns:
+            a, b = max(shot[0], float(turn["start"])), min(shot[1], float(turn["end"]))
+            if b <= a or turn.get("speaker") is None:
+                continue
+            i0, i1 = int(a * fps), max(int(a * fps) + 1, int(b * fps))
+            for index, s in enumerate(series):
+                tally = votes.setdefault(angle, {}).setdefault(str(turn["speaker"]), {})
+                tally[index] = tally.get(index, 0.0) + float(np.sum(s[i0:i1]))
+    return {
+        angle: {speaker: positions[angle][max(tally, key=tally.get)] for speaker, tally in by_speaker.items()}
+        for angle, by_speaker in votes.items()
+    }
+
+
 def active_face_segments(
     analysis: Dict[str, Any],
     shot: Tuple[float, float],
     turns: Sequence[Dict[str, Any]],
     crop_w: int,
+    speaker_faces: Optional[Dict[Tuple[int, ...], Dict[str, float]]] = None,
 ) -> List[Tuple[float, float, Dict[str, float]]]:
-    """Inside one shot, (start, end, face) with the face whose mouth moves most in
-    each speaker turn. The frame only changes when the turn does. Empty when the
-    shot does not show two separate faces."""
+    """Inside one shot, (start, end, face) with the face of whoever holds each turn.
+    The frame only changes when the speaker does. Empty when the shot does not show
+    two separate faces."""
     start, end = shot
     clusters = cluster_face_positions(analysis["face_samples"], [shot], crop_w)
     if len(clusters) < 2:
         return []
+    known = (speaker_faces or {}).get(camera_angle(clusters, crop_w), {})
     fps = analysis["motion_fps"]
     series = [mouth_motion_series(analysis, cluster) for cluster in clusters]
     # Speakers change at turn boundaries; a shot without labels counts as one turn
     cuts = sorted({start, end, *(float(t["start"]) for t in turns if start < float(t["start"]) < end)})
     segments: List[Tuple[float, float, Dict[str, float]]] = []
     for a, b in zip(cuts, cuts[1:]):
-        i0, i1 = int(a * fps), max(int(a * fps) + 1, int(b * fps))
-        scores = [float(np.mean(s[i0:i1])) if len(s[i0:i1]) else 0.0 for s in series]
-        face = clusters[int(np.argmax(scores))]
+        speaker = next(
+            (str(t["speaker"]) for t in turns
+             if t.get("speaker") is not None and float(t["start"]) <= (a + b) / 2 < float(t["end"])),
+            None,
+        )
+        if speaker in known:
+            face = min(clusters, key=lambda c: abs(c["cx"] - known[speaker]))
+        else:
+            i0, i1 = int(a * fps), max(int(a * fps) + 1, int(b * fps))
+            scores = [float(np.mean(s[i0:i1])) if len(s[i0:i1]) else 0.0 for s in series]
+            face = clusters[int(np.argmax(scores))]
         if segments and segments[-1][2] is face:
             segments[-1] = (segments[-1][0], b, face)
         else:
             segments.append((a, b, face))
     return segments
+
+
+def zoom_box(face: Dict[str, float], width: int, height: int, crop_w: int, crop_h: int) -> Optional[Tuple[int, int, int, int]]:
+    """(x, y, w, h) closing in on a small face in a wide shot, or None if it is big enough."""
+    zoom = min(ACTIVE_FACE_MAX_ZOOM, ACTIVE_FACE_TARGET * height / max(face["h"], 1.0))
+    if zoom < ACTIVE_FACE_MIN_ZOOM:
+        return None
+    w, h = round_to_even(int(crop_w / zoom)), round_to_even(int(crop_h / zoom))
+    x = clamp_even(int(face["cx"] - w / 2), 0, max(0, width - w))
+    y = clamp_even(int(face["cy"] - h * ACTIVE_FACE_EYE_LINE), 0, max(0, height - h))
+    return x, y, w, h
 
 
 def build_active_face_chain(
@@ -931,9 +997,10 @@ def build_active_face_chain(
     duration: float,
     turns: Sequence[Dict[str, Any]],
     people_intervals: Sequence[Tuple[float, float]],
-) -> Optional[str]:
-    """Crop chain for a whole clip: shots with several people follow whoever is
-    talking, the rest their main face. None when the analysis is unavailable."""
+) -> Optional[Tuple[str, List[Tuple[float, float, Tuple[int, int, int, int]]]]]:
+    """Crop chain for a whole clip, plus closer framings for small faces in wide
+    shots: shots with several people follow whoever is talking, the rest their main
+    face. None when the analysis is unavailable."""
     analysis = analyze_speaker_clip(input_path, width, height)
     if not analysis:
         return None
@@ -943,18 +1010,24 @@ def build_active_face_chain(
     def to_x(centre: float) -> int:
         return clamp_even(int(centre - crop_w / 2), 0, max_x)
 
+    shots = split_shots(analysis["scene_cuts"], duration)
+    people_shots = [s for s in shots if any(a <= (s[0] + s[1]) / 2 < b for a, b in people_intervals)]
+    speaker_faces = speaker_faces_by_angle(analysis, people_shots, turns, crop_w)
     pieces: List[Tuple[float, float, float, float]] = []
+    zooms: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
     last_x = max_x // 2
-    for shot in split_shots(analysis["scene_cuts"], duration):
-        middle = (shot[0] + shot[1]) / 2
+    for shot in shots:
         segments: List[Tuple[float, float, Dict[str, float]]] = []
-        if any(a <= middle < b for a, b in people_intervals):
-            segments = active_face_segments(analysis, shot, turns, crop_w)
+        if shot in people_shots:
+            segments = active_face_segments(analysis, shot, turns, crop_w, speaker_faces)
         if segments:
             for a, b, face in segments:
                 x = to_x(face["cx"])
                 pieces.append((a, b, float(x), float(x)))
                 last_x = x
+                box = zoom_box(face, width, height, crop_w, crop_h)
+                if box:
+                    zooms.append((a, b, box))
             continue
         tracked = shot_trajectory_pieces(face_samples, shot, width, height, crop_w)
         if tracked:
@@ -971,7 +1044,7 @@ def build_active_face_chain(
         last_x = x
     if not pieces:
         return None
-    return f"crop={crop_w}:{crop_h}:x='{build_crop_x_expression(pieces)}':y=0,{VERTICAL_SCALE_CHAIN}"
+    return f"crop={crop_w}:{crop_h}:x='{build_crop_x_expression(pieces)}':y=0,{VERTICAL_SCALE_CHAIN}", zooms
 
 
 def build_speaker_filter_plan(

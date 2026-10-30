@@ -1169,7 +1169,11 @@ PEOPLE_FIT_REASONS = frozenset(
 )
 INSERT_SAMPLES = 5
 INSERT_MIN_HEIGHT = 0.5         # of the frame
-INSERT_ASPECT = (0.4, 0.9)      # width / height of a vertical video
+INSERT_ASPECT = (0.4, 2.2)      # width / height: a vertical video, an article, a chart
+INSERT_FILL_ASPECT = 0.9        # narrower than this fills the screen; wider is shown whole
+INSERT_MAX_WIDTH = 0.85         # of the frame: wider is the frame itself, not something pasted in it
+WIDE_SHOT_FACES = 2             # small faces seen together: a wide shot of people, not content
+WIDE_SHOT_FACE_RATE = 0.4
 INSERT_MIN_FILL = 0.85          # of its bounding box: a real rectangle
 
 
@@ -1187,7 +1191,7 @@ def find_portrait_rectangle(frame_bgr) -> Optional[Tuple[int, int, int, int]]:
         return None
     left, right = int(columns[0]), int(columns[-1])
     w = right - left
-    if w < width * 0.1:
+    if w < width * 0.1 or w > width * INSERT_MAX_WIDTH:
         return None
     rows = np.where(edges[:, left:right].sum(axis=1) >= w * INSERT_MIN_FILL)[0]
     if len(rows) < 2:
@@ -1256,15 +1260,20 @@ def build_vertical_compositor_filter(
     inserts = inserts or []
     # A vertical video pasted in the frame fills the screen during its shot
     insert_splits = "".join(f"[insrc{i}]" for i in range(len(inserts)))
+    def insert_fit(w: int, h: int) -> str:
+        # Vertical: fills the screen. Anything wider: whole, as wide as the screen, over the blur
+        if w / h < INSERT_FILL_ASPECT:
+            return "scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920"
+        return "scale=1080:-2:flags=lanczos"
+
     insert_chains = "".join(
-        f"[insrc{i}]crop={w}:{h}:{x}:{y},scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,"
-        f"crop=1080:1920,setsar=1[ins{i}];"
+        f"[insrc{i}]crop={w}:{h}:{x}:{y},{insert_fit(w, h)},setsar=1[ins{i}];"
         for i, (_, _, (x, y, w, h)) in enumerate(inserts)
     )
     last, insert_overlays = "[t2]", ""
     for i, (a, b, _) in enumerate(inserts):
         next_label = "[vout]" if i == len(inserts) - 1 else f"[o{i}]"
-        insert_overlays += f";{last}[ins{i}]overlay=0:0:enable='between(t\\,{a:.3f}\\,{b:.3f})'{next_label}"
+        insert_overlays += f";{last}[ins{i}]overlay=(W-w)/2:(H-h)/2:enable='between(t\\,{a:.3f}\\,{b:.3f})'{next_label}"
         last = f"[o{i}]"
     # Smooth Gaussian background: blur at half resolution (plenty of detail for a
     # heavy blur) with multiple passes for a true Gaussian falloff, then upscale
@@ -1376,21 +1385,50 @@ def describe_vertical_layout(
     # Two people who cannot share a 9:16 crop are not slide or sports content.
     # Call/stage layouts and speaker framing still apply; if both decline, that
     # shot keeps the full frame instead of a dominant-face crop.
-    content_fits = [
-        shot for shot in plan
-        if shot["kind"] == "fit" and shot.get("reason") not in PEOPLE_FIT_REASONS
-    ]
-    # Shots kept in full only for their people become crops of one person, and those
-    # without any person but holding a vertical video fill the screen with it.
-    people_fits = [s for s in plan if s["kind"] == "fit" and s.get("reason") in PEOPLE_FIT_REASONS]
+    def faces_in(start: float, end: float) -> List[List[Tuple[float, float, float, float]]]:
+        return [list(faces) for t, faces in face_samples if start <= t < end]
+
+    def many_people(start: float, end: float) -> bool:
+        samples = faces_in(start, end)
+        hits = sum(len(faces) >= WIDE_SHOT_FACES for faces in samples)
+        return bool(samples) and hits / len(samples) >= WIDE_SHOT_FACE_RATE
+
+    def pasted_rectangle(start: float, end: float) -> Optional[Tuple[int, int, int, int]]:
+        box = find_portrait_insert(input_path, start, end)
+        if not box:
+            return None
+        # A door or a screen on set is a rectangle too, but people sit outside it
+        x, y, w, h = box
+        for faces in faces_in(start, end):
+            for fx, fy, fw, fh in faces:
+                cx, cy = fx + fw / 2, fy + fh / 2
+                if not (x <= cx <= x + w and y <= cy <= y + h):
+                    return None
+        return box
+
+    boundaries = [0.0, *sorted(c for c in scene_cuts if 0 < c < duration), duration]
     inserts: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
-    for shot in content_fits:
-        box = find_portrait_insert(input_path, shot["start"], shot["end"])
+    for start, end in zip(boundaries, boundaries[1:]):
+        box = pasted_rectangle(start, end)
         if box:
-            inserts.append((shot["start"], shot["end"], box))
-            logger.info("Vertical insert %s at %.1f-%.1f s", box, shot["start"], shot["end"])
-    inserted = {start for start, _, _ in inserts}
-    content_only = [(s["start"], s["end"]) for s in content_fits if s["start"] not in inserted]
+            inserts.append((start, end, box))
+            logger.info("Pasted rectangle %s at %.1f-%.1f s", box, start, end)
+    pasted = list(inserts)
+
+    def overlaps_pasted(shot: Dict[str, Any]) -> bool:
+        return any(a < shot["end"] and shot["start"] < b for a, b, _ in pasted)
+
+    # Shots kept in full only for their people become crops of one person
+    people_fits = [
+        s for s in plan
+        if s["kind"] == "fit" and not overlaps_pasted(s)
+        and (s.get("reason") in PEOPLE_FIT_REASONS or many_people(s["start"], s["end"]))
+    ]
+    content_fits = [
+        s for s in plan
+        if s["kind"] == "fit" and s not in people_fits and not overlaps_pasted(s)
+    ]
+    content_only = [(s["start"], s["end"]) for s in content_fits]
 
     # A persistent reaction inset is independent of fit intervals, camera cuts,
     # and speaker labels. Separate it before dominant-face tracking can confuse
@@ -1425,7 +1463,7 @@ def describe_vertical_layout(
         logger.info("Reaction layout: inset %s, %d source sections", reaction['inset'], len(reaction['source_runs']))
         return _described("reaction", reaction["video_filter"], "complex", reaction["caption_y"])
 
-    if all(s["kind"] == "fit" for s in plan) and content_fits and not people_fits and not inserts:
+    if all(s["kind"] == "fit" for s in plan) and content_fits and not people_fits and not pasted:
         return _described("fit", build_full_frame_filter(), "complex", 0.80)
 
     # choose_talking_head_layout already refuses cut-heavy clips (more than
@@ -1434,16 +1472,21 @@ def describe_vertical_layout(
         choose_talking_head_layout(width, height, face_samples, scene_cuts)
         if not content_fits else None
     )
+    if talking and talking["kind"] == "fit" and people_fits:
+        talking = None      # a whole set seen from afar is not a video-call gallery: show who talks
     speaker_chain = None
     if people_fits:
         # Per shot and per turn: pooled speaker-to-face mappings break across camera angles
         from .speaker_framing import build_active_face_chain
 
         try:
-            speaker_chain = build_active_face_chain(
+            active = build_active_face_chain(
                 input_path, width, height, crop_w, crop_h, duration, speaker_turns or [],
                 [(s["start"], s["end"]) for s in people_fits],
             )
+            if active:
+                speaker_chain, zooms = active
+                inserts = [*inserts, *zooms]
         except Exception as exc:
             logger.warning("Active face framing failed (%s); tracking dominant face", exc)
     if not speaker_chain and not content_fits and speaker_words and (not talking or talking["kind"] == "stack"):
@@ -1476,7 +1519,7 @@ def describe_vertical_layout(
         return _described(
             talking["kind"], talking["video_filter"], "complex", talking["caption_y"]
         )
-    if all(s["kind"] == "fit" for s in plan) and not track:
+    if all(s["kind"] == "fit" for s in plan) and not track and not pasted:
         return _described("fit", build_full_frame_filter(), "complex", 0.80)
 
     keys = build_crop_trajectory(track, width, crop_w) if track else []
@@ -1518,13 +1561,19 @@ def describe_vertical_layout(
                 )
         return _described("crop", crop_chain, "vf", bleed_caption(face_samples))
 
-    face_intervals = [
-        (s["start"], s["end"]) for s in plan
-        if s["kind"] == "face" or s.get("reason") in PEOPLE_FIT_REASONS
-    ]
+    # The person crop shows everywhere except over content and pasted rectangles
+    hidden = sorted([*content_only, *[(a, b) for a, b, _ in pasted]])
+    face_intervals: List[Tuple[float, float]] = []
+    cursor = 0.0
+    for a, b in hidden:
+        if a > cursor:
+            face_intervals.append((cursor, a))
+        cursor = max(cursor, b)
+    if cursor < duration:
+        face_intervals.append((cursor, duration))
     logger.info(
-        "Scene-aware vertical layout: %d person shot(s), %d content shot(s), %d vertical insert(s)",
-        len(face_intervals), len(content_only), len(inserts),
+        "Scene-aware vertical layout: %d person shot(s), %d content shot(s), %d rectangle(s), %d zoom(s)",
+        len(face_intervals), len(content_only), len(pasted), len(inserts) - len(pasted),
     )
     return _described(
         "compositor",
