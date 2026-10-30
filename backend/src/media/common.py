@@ -137,7 +137,8 @@ FINAL_VIDEO_PRESET = "medium"
 
 INTERMEDIATE_CRF = 16
 
-OUTPUT_FPS = 30
+# 60 as in the reference Shorts (Diego, 30 Oct): a 140 ms caption cross-fade is four frames at 30.
+OUTPUT_FPS = 60
 
 AUDIO_BITRATE = "192k"
 

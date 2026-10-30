@@ -304,12 +304,11 @@ def build_final_video_encode_args(
     crf: int = FINAL_VIDEO_CRF,
     preset: str = FINAL_VIDEO_PRESET,
     fps: int | str = OUTPUT_FPS,
-    level: str = "4.1",
+    level: str = "4.2",
 ) -> List[str]:
     """libx264 args for the quality-determining final pass (CFR, H.264 High).
 
-    Level 4.1 covers 1080p30. Original-format output at 60 fps (or 59.94)
-    needs 4.2 or x264 rejects the stream.
+    Level 4.2 covers 1080p60; at 4.1 x264 rejects a 60 fps stream.
     """
     return [
         "-c:v", "libx264",

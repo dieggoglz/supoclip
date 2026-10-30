@@ -18,6 +18,16 @@ from typing import Dict, Any, Literal
 
 AnimationType = Literal["none", "karaoke", "pop", "fade", "bounce", "glow"]
 
+# Advance of each capital in Nunito Black, as a share of the font size (read from the font file).
+NUNITO_BLACK_WIDTHS: Dict[str, float] = {
+    'A': 0.763, 'B': 0.702, 'C': 0.688, 'D': 0.786, 'E': 0.614, 'F': 0.579, 'G': 0.747, 'H': 0.786, 'I': 0.312,
+    'J': 0.39, 'K': 0.712, 'L': 0.585, 'M': 0.884, 'N': 0.758, 'O': 0.807, 'P': 0.676, 'Q': 0.807, 'R': 0.706,
+    'S': 0.651, 'T': 0.644, 'U': 0.748, 'V': 0.742, 'W': 1.128, 'X': 0.698, 'Y': 0.645, 'Z': 0.625, '0': 0.6,
+    '1': 0.6, '2': 0.6, '3': 0.6, '4': 0.6, '5': 0.6, '6': 0.6, '7': 0.6, '8': 0.6, '9': 0.6,
+    ' ': 0.286, '.': 0.272, ',': 0.272, '?': 0.478, '!': 0.272, "'": 0.269, '"': 0.515, '-': 0.445, ':': 0.272,
+    ';': 0.272, '$': 0.6, '%': 0.964, '&': 0.766, '—': 1.0, '’': 0.272, '“': 0.502, '”': 0.502,
+}
+
 CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "Default",
@@ -220,13 +230,14 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "emphasis_color": "#39FF14",
         # No cyan: Diego, 29 Oct, hard to read. Red and orange from the reference Short
         "emphasis_palette": ["#39FF14", "#FF3FD2", "#FFE600", "#FF4D4D", "#FF9F1C"],
-        # Reference Short (Diego, 30 Oct): a new colour every line, lines cut by phrase
-        # (1-4 words) and a more visible blur in and out
+        # Reference Shorts (Diego, 30 Oct): a new colour every line, lines cut by phrase
+        # (1-4 words), a cross-fade with a soft blur between lines and a hard shadow
         "color_per_line": True,
         "phrase_chunks": True,
-        "line_blur_px": 9,
-        "line_motion": True,               # lines arrive and leave stretched, with a sideways smear
-        "caption_char_width": 0.62,        # Nunito Black capitals, measured
+        "line_blur_px": 7,
+        "line_motion": True,
+        "caption_char_width": 0.62,        # for a character missing from the table
+        "caption_char_widths": NUNITO_BLACK_WIDTHS,
         "stroke_color": None,
         "stroke_width": 0,
         "background": False,

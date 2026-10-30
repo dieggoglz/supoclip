@@ -1484,10 +1484,10 @@ def render_reframed_clip_ffmpeg(
             filters.append("setsar=1")
         if subs:
             encode_fps: int | str = OUTPUT_FPS
-            encode_level = "4.1"
+            encode_level = "4.2"
         elif needs_fps or source_fps is None:
             encode_fps = MAX_OUTPUT_FPS if needs_fps else OUTPUT_FPS
-            encode_level = "4.2" if needs_fps else "4.1"
+            encode_level = "4.2"
         else:
             # 59.94 stays 60000/1001. Rounding it to 60 would drop or duplicate
             # frames on an NTSC master that is already inside the cap.

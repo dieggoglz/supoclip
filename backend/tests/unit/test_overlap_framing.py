@@ -205,7 +205,7 @@ def test_final_render_switches_solo_stack_solo_and_preserves_audio_and_captions(
     ]))
     assert {s["codec_type"] for s in probe["streams"]} == {"video", "audio"}
     video = next(s for s in probe["streams"] if s["codec_type"] == "video")
-    assert (video["width"], video["height"], video["r_frame_rate"]) == (1080, 1920, "30/1")
+    assert (video["width"], video["height"], video["r_frame_rate"]) == (1080, 1920, "60/1")
     assert float(video["duration"]) == pytest.approx(2.4, abs=1 / 30)
     frames = subprocess.check_output([
         "ffmpeg", "-v", "error", "-i", str(output), "-vf", "fps=10,format=rgb24",

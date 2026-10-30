@@ -391,12 +391,12 @@ def test_the_glow_template_draws_a_halo_layer_under_sharp_text_with_one_neon_wor
     lines = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue:")]
     under = [l for l in lines if l.startswith("Dialogue: 0,")]
     texts = [l for l in lines if l.startswith("Dialogue: 1,")]
-    assert len(texts) == 2                                      # 6 words, up to 4 per line: 2 lines
+    assert 2 <= len(texts) <= 3                                 # 6 words, up to 4 per line and as wide as the frame
     halos = [l for l in under if r"\3c&H000000&" in l]
     glows = [l for l in under if r"\3a&H88&" in l]
-    assert len(halos) == 2 and 1 <= len(glows) <= 2              # a dark halo per line, a glow where a word is neon
+    assert len(halos) == len(texts) and 1 <= len(glows) <= len(texts)   # a dark halo per line, a glow on a neon word
     assert all(r"\1a&HFF&" in l and r"\blur" in l for l in under)    # invisible fill, blurred border
-    assert all(r"\t(0,120,\blur0)" in l for l in texts)              # each line blurs in
+    assert all(r"\t(0,140,\blur0)" in l for l in texts)              # each line blurs in
     assert "MONEY" in texts[0] or "MONEY" in texts[1]
 
 
@@ -436,9 +436,9 @@ def test_phrase_lines_follow_speech_with_a_varying_number_of_words():
         starts = caption_phrase_starts(words, 4, 950, 77 // 2)
         return [" ".join(texts[a:b]) for a, b in zip(starts, starts[1:] + [len(texts)])]
 
-    assert lines("Look", "up.", "Bro", "got", "the", "gun", "on", "me") == ["Look up.", "Bro got the gun", "on me"]
+    assert lines("Look", "up.", "Bro", "got", "the", "gun") == ["Look up.", "Bro got the gun"]
     assert lines("Lou?", "I", "don't", "know", "why") == ["Lou?", "I don't know why"]      # punctuation
-    assert lines("somebody", "knock", "he", "looked", pause_after=(1,)) == ["somebody knock", "he looked"]    # pause
+    assert lines("somebody", "knock", "he", "looked", "at", "me", pause_after=(1,)) == ["somebody knock", "he looked at me"]
     assert lines("but", "I", "rolled", "the", "window", "down") == ["but I rolled", "the window down"]     # determiner
     assert lines("building", "a", "bomb", "in", "my", "bedroom") == ["building a bomb", "in my bedroom"]   # not "in / my"
     assert lines("I", "said", "and", "he", "left") == ["I said", "and he left"]            # new clause
@@ -473,14 +473,14 @@ def test_the_glow_template_changes_colour_every_line_and_lights_a_word_on_each(t
         caption_template="glow", keep_ranges=[(1.0, 3.5)],
     )
     texts = [l for l in ass_path.read_text(encoding="utf-8").splitlines() if l.startswith("Dialogue: 1,")]
-    assert len(texts) == 4                                      # Look up. / On me. / Why? / Bro got guns.
+    assert len(texts) == 3                                      # Look up. / On me. / Why? Bro got guns.
     palette = [hex_to_ass_color(c) for c in get_template("glow")["emphasis_palette"]]
     used = [next(c for c in palette if c in line) for line in texts]
     assert all(a != b for a, b in zip(used, used[1:]))          # a new colour every line
-    assert all(r"\blur9" in line for line in texts)            # a visible blur in and out
+    assert all(r"\blur7" in line for line in texts)             # a soft blur in and out
 
 
-def test_glow_lines_arrive_and_leave_stretched_with_a_sideways_smear_and_no_gap(tmp_path):
+def test_glow_lines_cross_fade_with_a_shrink_and_a_blur_and_no_empty_gap(tmp_path):
     video_path = tmp_path / "source.mp4"
     timed = [("Look", 1000, 1300), ("up.", 1320, 1600), ("Bro", 1700, 2000), ("got", 2020, 2300), ("guns.", 2320, 2800)]
     video_path.with_suffix(".transcript_cache.json").write_text(
@@ -498,10 +498,34 @@ def test_glow_lines_arrive_and_leave_stretched_with_a_sideways_smear_and_no_gap(
     assert "Nunito Black" in content.split("[Events]")[0]
     lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
     texts = [l for l in lines if l.startswith("Dialogue: 1,")]
-    assert len(texts) == 2 and all(r"\fscx130" in l and r"\fscx100" in l for l in texts)
-    # the first line stays up until the second one has started: no empty flash
-    first_end = texts[0].split(",")[2]
-    second_start = texts[1].split(",")[1]
-    assert first_end > second_start
-    ghosts = [l for l in lines if l.startswith("Dialogue: 2,")]
-    assert len(ghosts) == 8 and all(r"\move(" in l and r"\alpha" in l for l in ghosts)   # 2 in + 2 out, per line
+    assert len(texts) == 2
+    assert all(r"\fscx91" in l and r"\t(0,140,\fscx100\fscy100)" in l and r"\fad(140,140)" in l for l in texts)
+    assert all(r"\shad5" in l for l in texts)                     # the hard shadow of the reference
+    assert not [l for l in lines if l.startswith("Dialogue: 2,")]    # no ghost copies
+    # the old line is still fading out when the new one fades in
+    assert texts[0].split(",")[2] > texts[1].split(",")[1]
+
+
+def test_line_width_is_measured_with_the_real_font_when_it_can_be():
+    from src.media.captions import caption_phrase_starts
+
+    words = [{"text": t, "start": i * 0.5, "end": i * 0.5 + 0.45} for i, t in enumerate(["It's", "so", "annoying."])]
+    assert caption_phrase_starts(words, 4, 950, 93, True, measure=lambda text: 800.0) == [0]        # fits
+    assert caption_phrase_starts(words, 4, 950, 93, True, measure=lambda text: 1000.0) != [0]       # does not
+
+
+def test_a_line_too_brief_to_read_joins_a_neighbour_when_they_fit():
+    from src.media.captions import caption_phrase_starts
+
+    def lines(*timed):
+        words = [{"text": t, "start": s, "end": e} for t, s, e in timed]
+        starts = caption_phrase_starts(words, 4, 950, 40)
+        return [" ".join(w["text"] for w in words[a:b]) for a, b in zip(starts, starts[1:] + [len(words)])]
+
+    # "Yeah," lasts 0.2 s: it goes with the next line
+    assert lines(("Yeah,", 0, 0.15), ("what", 0.2, 0.4), ("is", 0.42, 0.9), ("it?", 0.92, 1.4)) == ["Yeah, what is it?"]
+    # the last line, too brief, goes back to the previous one
+    assert lines(("I", 0, 0.5), ("know", 0.52, 1.1), ("it.", 1.12, 1.3)) == ["I know it."]
+    # if they do not fit, each keeps its own line
+    assert len(lines(("one", 0, 0.1), ("two", 0.11, 0.2), ("three", 0.21, 0.3), ("four,", 0.31, 0.4),
+                     ("five", 0.5, 0.6), ("six", 0.61, 0.7), ("seven", 0.71, 0.8), ("eight", 0.81, 0.9))) == 2
