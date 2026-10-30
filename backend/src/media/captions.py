@@ -791,7 +791,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f"{{{font_tag}\\3c{glow_color}\\3a&H88&}}{disp}" if hot else f"{{{font_tag}\\3a&HFF&}}{disp}"
             )
             tinted = f"\\4c{ass_color_mix(glow_color, (0, 0, 0), 1 - SHADOW_SHADE)}" if hot and template.get("gradient_word") else ""
-            text_spans.append(f"{{{font_tag}\\c{glow_color if hot else primary}{tinted}}}{disp}")
+            word_color = glow_color if hot else primary
+            text_spans.append(f"{{{font_tag}\\c{word_color}\\3c{word_color}{tinted}}}{disp}")
             band_spans.append((hot, disp))
         position = f"\\pos({video_width // 2},{y_pos})"
         motion = bool(template.get("line_motion"))
@@ -808,8 +809,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # The hard dark shadow to the lower right of the reference
         shadow = f"\\shad{max(2, font_px // 16)}\\4c&H000000&\\4a&H28&" if motion else "\\shad0"
         blur_in_ms = fade_ms if motion else 120
+        # A stroke in each word's own colour makes the letters heavier (Diego, 30 Oct)
+        weight_px = int(template.get("text_weight_px", 0))
         text_tags = (
-            f"{{{position}\\bord0{shadow}\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
+            f"{{{position}\\bord{weight_px}{shadow}\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
             f"\\t({duration_ms - fade_ms if motion else blur_out_ms},{duration_ms},\\blur{blur_px}){fade}}}"
         )
         timing = f"{ass_timestamp(start)},{ass_timestamp(end)}"
@@ -823,7 +826,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             band_px = font_px * GRADIENT_HEIGHT / GRADIENT_BANDS
             top_y = y_pos - font_px * GRADIENT_HEIGHT / 2
             band_tags = (
-                f"{position}\\bord0\\shad0\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
+                f"{position}\\bord{weight_px}\\shad0\\blur{blur_px}\\t(0,{blur_in_ms},\\blur0)"
                 f"\\t({duration_ms - fade_ms},{duration_ms},\\blur{blur_px}){fade}"
             )
             for band in range(1, GRADIENT_BANDS):     # the first band is the base colour of the text layer
@@ -831,7 +834,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 y1 = int(round(top_y + band * band_px))
                 y2 = video_height if band == GRADIENT_BANDS - 1 else int(round(top_y + (band + 1) * band_px))
                 spans = " ".join(
-                    f"{{{font_tag}\\1a&H00&\\c{color}}}{disp}" if hot else f"{{{font_tag}\\1a&HFF&}}{disp}"
+                    f"{{{font_tag}\\1a&H00&\\3a&H00&\\c{color}\\3c{color}}}{disp}"
+                    if hot
+                    else f"{{{font_tag}\\1a&HFF&\\3a&HFF&}}{disp}"
                     for hot, disp in band_spans
                 )
                 events.append(

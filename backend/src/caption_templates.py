@@ -236,6 +236,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "phrase_chunks": True,
         "line_blur_px": 7,
         "gradient_word": True,             # the coloured word fades from strong at the top to pale below
+        "text_weight_px": 3,               # heavier letters
         "line_motion": True,
         "caption_char_width": 0.62,        # for a character missing from the table
         "caption_char_widths": NUNITO_BLACK_WIDTHS,
