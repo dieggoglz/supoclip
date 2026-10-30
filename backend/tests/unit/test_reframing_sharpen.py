@@ -34,7 +34,7 @@ def test_static_vertical_crop_sharpens_after_upscale():
 
     assert caption_y is None
     assert mode == "vf"
-    assert video_filter.endswith(
+    assert video_filter.split(",fps=")[0].endswith(
         f"scale=1080:1920:flags=lanczos,{UPSCALE_SHARPEN_FILTER},setsar=1"
     )
 

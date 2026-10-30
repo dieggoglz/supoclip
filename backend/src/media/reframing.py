@@ -1251,6 +1251,22 @@ def find_portrait_insert(input_path: Path, start: float, end: float) -> Optional
     return (round_to_even(x + inset), round_to_even(y + inset), round_to_even(w - 2 * inset), round_to_even(h - 2 * inset))
 
 
+# Punch-ins: the same shot jumps between two framings, as clip channels do (Diego, 30 Oct:
+# bettereverydayclips changes framing every 1-2 s). Slightly slower here: 2.5 s and 12 %.
+PUNCH_IN_SECONDS = 2.5
+PUNCH_IN_ZOOM = 1.12
+
+
+def punch_in_fragment() -> str:
+    """Zoompan fragment that alternates framings in hard jumps, kept high to spare the head."""
+    z_expr = f"if(isnan(it)\\,1\\,if(mod(floor(it/{PUNCH_IN_SECONDS})\\,2)\\,{PUNCH_IN_ZOOM}\\,1))"
+    # fps first: zoompan outputs one frame per input frame, so 30 fps in at fps=60 out plays double speed
+    return (
+        f"fps={OUTPUT_FPS},zoompan=z='{z_expr}':x='(iw-iw/zoom)/2':y='(ih-ih/zoom)*0.3'"
+        f":d=1:s=1080x1920:fps={OUTPUT_FPS},setsar=1"
+    )
+
+
 def build_full_frame_filter(blur_sigma: int = 14) -> str:
     """Preserve the complete source on a vertical canvas, without a crop branch."""
     return (
@@ -1312,7 +1328,7 @@ def build_vertical_compositor_filter(
         f"{insert_chains}"
         "[bgsrc]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,"
         f"gblur=sigma={blur_sigma}:steps=2,scale=1080:1920:flags=bilinear,setsar=1[bg];"
-        f"[crsrc]{crop_chain}[face];"
+        f"[crsrc]{crop_chain},{punch_in_fragment()}[face];"
         "[ftsrc]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos,"
         "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1[fit];"
         f"[bg][face]overlay=0:0:enable='{face_en}'[t1];"
@@ -1608,7 +1624,7 @@ def describe_vertical_layout(
                     "vf",
                     bleed_caption(face_samples),
                 )
-        return _described("crop", crop_chain, "vf", bleed_caption(face_samples))
+        return _described("crop", f"{crop_chain},{punch_in_fragment()}", "vf", bleed_caption(face_samples))
 
     # The person crop shows everywhere except over content, pasted rectangles and open frames
     hidden = sorted([*content_only, *[(a, b) for a, b, _ in pasted], *[(a, b) for a, b, _ in wide_views]])

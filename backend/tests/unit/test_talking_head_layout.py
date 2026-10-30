@@ -345,3 +345,13 @@ def test_saying_you_show_something_opens_the_frame_for_a_few_seconds():
     assert find_show_moments(both, 30.0) == [(1.0, 7.0)]                          # touching moments join
     chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [], inserts=[(2.0, 4.0, (500, 0, 810, 1080))])
     assert "crop=810:1080:500:0,scale=1080:-2" in chain                           # 3:4, whole, over the blur
+
+
+def test_the_person_layer_jumps_between_two_framings():
+    from src.media.reframing import build_vertical_compositor_filter, punch_in_fragment
+
+    fragment = punch_in_fragment()
+    assert "mod(floor(it/2.5)" in fragment and "1.12" in fragment
+    assert fragment.startswith("fps=60,zoompan=")      # or a 30 fps source plays double speed
+    chain = build_vertical_compositor_filter("crop=606:1080:0:0", [(0.0, 2.0)], [])
+    assert f"[crsrc]crop=606:1080:0:0,{fragment}[face]" in chain
