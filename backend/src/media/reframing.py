@@ -1,5 +1,6 @@
 """Reframing helpers for the video pipeline."""
 
+import json
 import re
 from typing import Sequence
 from typing import Any
@@ -775,15 +776,17 @@ def _scene_cuts_from_diffs(diffs: List[Tuple[float, float]]) -> List[float]:
 def exact_scene_cuts(input_path: Path, cuts: Sequence[float], before: float = 0.45, after: float = 0.12) -> List[float]:
     """Move each cut to its exact frame. Analysis samples at 3-10 fps, so a cut is found up to a third of a second
     late, and until then the new shot played with the old crop: an empty curtain for a few frames (Diego, 31 Oct).
-    Each time falls half a frame before the change, so that frame is the first of the new shot in any `t` test."""
+    Each time falls between the last old frame and the first new one, on the clock filters read: packet times minus
+    the file's start, since the video of a re-encoded range can start a frame after its audio."""
     if not cuts:
         return []
     try:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate",
-             "-of", "csv=p=0", str(input_path)], capture_output=True, text=True, check=True,
-        ).stdout.strip().split("/")
-        fps = float(probe[0]) / float(probe[1] if len(probe) > 1 else 1)
+        probe = json.loads(subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time:format=start_time",
+             "-of", "json", str(input_path)], capture_output=True, text=True, check=True,
+        ).stdout)
+        origin = float(probe["format"].get("start_time") or 0.0)
+        times = sorted(float(p["pts_time"]) - origin for p in probe["packets"] if p.get("pts_time") not in (None, "N/A"))
         raw = subprocess.run(
             ["ffmpeg", "-v", "error", "-an", "-sn", "-i", str(input_path), "-vf", "scale=64:36",
              "-fps_mode", "passthrough", "-pix_fmt", "gray", "-f", "rawvideo", "-"], capture_output=True, check=True,
@@ -792,20 +795,21 @@ def exact_scene_cuts(input_path: Path, cuts: Sequence[float], before: float = 0.
     except Exception as exc:
         logger.warning("Exact scene cuts failed (%s); keeping the sampled times", exc)
         return sorted(cuts)
-    if fps <= 0 or len(frames) < 2:
+    if len(frames) < 2 or len(times) < len(frames):
         return sorted(cuts)
     changes = np.abs(frames[1:] - frames[:-1]).mean(axis=(1, 2))
+    moments = np.array(times[: len(frames)])
     exact = set()
     for cut in cuts:
-        first = max(0, int((cut - before) * fps))
-        last = min(len(changes), int((cut + after) * fps) + 1)
+        first = int(np.searchsorted(moments, cut - before))
+        last = min(len(changes), int(np.searchsorted(moments, cut + after)) + 1)
         if last <= first:
             exact.add(round(float(cut), 4))
             continue
         peak = first + int(np.argmax(changes[first:last]))
         # A cut stands out from what surrounds it; a gentle dissolve keeps the time it was found at
         if changes[peak] >= max(6.0, 3.0 * float(np.median(changes[first:last]))):
-            exact.add(round((peak + 0.5) / fps, 4))
+            exact.add(round(float(moments[peak] + moments[peak + 1]) / 2, 4))
         else:
             exact.add(round(float(cut), 4))
     return sorted(exact)
@@ -1252,6 +1256,9 @@ def find_portrait_rectangle(frame_bgr) -> Optional[Tuple[int, int, int, int]]:
     return left, top, w, h
 
 
+OPEN_FOR_SHOW_MOMENTS = False   # Diego, 31 Oct: it took the person off centre; the show cuts to what they hold up anyway
+
+
 def find_show_moments(words: Sequence[Dict[str, Any]], duration: float) -> List[Tuple[float, float]]:
     """Moments when someone says they are showing something, merged when they touch."""
     texts = [re.sub(r"[^a-z' ]", "", str(w.get("text", "")).lower()).strip() for w in words]
@@ -1505,7 +1512,7 @@ def describe_vertical_layout(
     # When someone says they are showing something, open the frame around them
     wide_views: List[Tuple[float, float, Tuple[int, int, int, int]]] = []
     wide_w = round_to_even(int(height * SHOW_ASPECT))
-    for a, b in find_show_moments(speaker_words or [], duration) if wide_w < width else []:
+    for a, b in find_show_moments(speaker_words or [], duration) if OPEN_FOR_SHOW_MOMENTS and wide_w < width else []:
         if any(pa < b and a < pb for pa, pb, _ in pasted):
             continue
         centres = [
