@@ -202,7 +202,7 @@ def _detect_all_faces(frame_bgr, face_detector, cascades) -> List[Tuple[float, f
 def analyze_speaker_clip(input_path: Path, width: int, height: int) -> Optional[Dict[str, Any]]:
     """One low-res decode: all faces (every few frames), a coarse per-cell
     motion grid (every frame) and scene cuts. Coordinates are in source px."""
-    from .reframing import _open_face_detectors, _scene_cuts_from_diffs
+    from .reframing import _open_face_detectors, _scene_cuts_from_diffs, exact_scene_cuts
 
     if width <= 0 or height <= 0:
         return None
@@ -277,7 +277,7 @@ def analyze_speaker_clip(input_path: Path, width: int, height: int) -> Optional[
         "motion": np.stack(motion),
         "motion_fps": SPEAKER_ANALYSIS_FPS,
         "motion_cell": SPEAKER_MOTION_CELL * scale,
-        "scene_cuts": _scene_cuts_from_diffs(diffs),
+        "scene_cuts": exact_scene_cuts(input_path, _scene_cuts_from_diffs(diffs)),
     }
 
 

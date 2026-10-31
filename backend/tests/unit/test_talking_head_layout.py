@@ -306,6 +306,26 @@ def test_each_speaker_is_one_face_per_angle_so_a_laugh_does_not_move_the_frame()
         (0.0, 2.0, 300), (2.0, 4.0, 1500), (4.0, 6.0, 300)]
 
 
+def test_a_cut_found_late_moves_to_its_exact_frame(tmp_path):
+    import shutil
+    import subprocess
+
+    import pytest
+    from src.media.reframing import exact_scene_cuts
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("needs ffmpeg")
+    clip = tmp_path / "c.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x36:r=30:d=2",
+                    "-f", "lavfi", "-i", "color=c=red:s=64x36:r=30:d=2", "-filter_complex", "[0][1]concat=n=2:v=1",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    # Frame 60 is the first red one; analysis at 3 fps reported it 0.3 s late
+    assert exact_scene_cuts(clip, [2.3]) == [pytest.approx(59.5 / 30, abs=0.001)]
+    # Two analyses that found the same cut give one
+    assert len(exact_scene_cuts(clip, [2.0, 2.3])) == 1
+    assert exact_scene_cuts(clip, []) == []
+
+
 def test_the_main_person_holds_the_opening_even_while_the_host_asks():
     import numpy as np
     from src.media.speaker_framing import active_face_segments, main_speaker, protagonist_angles, speaker_faces_by_angle

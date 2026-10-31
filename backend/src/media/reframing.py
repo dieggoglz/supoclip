@@ -772,6 +772,45 @@ def _scene_cuts_from_diffs(diffs: List[Tuple[float, float]]) -> List[float]:
     return cuts
 
 
+def exact_scene_cuts(input_path: Path, cuts: Sequence[float], before: float = 0.45, after: float = 0.12) -> List[float]:
+    """Move each cut to its exact frame. Analysis samples at 3-10 fps, so a cut is found up to a third of a second
+    late, and until then the new shot played with the old crop: an empty curtain for a few frames (Diego, 31 Oct).
+    Each time falls half a frame before the change, so that frame is the first of the new shot in any `t` test."""
+    if not cuts:
+        return []
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate",
+             "-of", "csv=p=0", str(input_path)], capture_output=True, text=True, check=True,
+        ).stdout.strip().split("/")
+        fps = float(probe[0]) / float(probe[1] if len(probe) > 1 else 1)
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-an", "-sn", "-i", str(input_path), "-vf", "scale=64:36",
+             "-fps_mode", "passthrough", "-pix_fmt", "gray", "-f", "rawvideo", "-"], capture_output=True, check=True,
+        ).stdout
+        frames = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 36, 64).astype(np.int16)
+    except Exception as exc:
+        logger.warning("Exact scene cuts failed (%s); keeping the sampled times", exc)
+        return sorted(cuts)
+    if fps <= 0 or len(frames) < 2:
+        return sorted(cuts)
+    changes = np.abs(frames[1:] - frames[:-1]).mean(axis=(1, 2))
+    exact = set()
+    for cut in cuts:
+        first = max(0, int((cut - before) * fps))
+        last = min(len(changes), int((cut + after) * fps) + 1)
+        if last <= first:
+            exact.add(round(float(cut), 4))
+            continue
+        peak = first + int(np.argmax(changes[first:last]))
+        # A cut stands out from what surrounds it; a gentle dissolve keeps the time it was found at
+        if changes[peak] >= max(6.0, 3.0 * float(np.median(changes[first:last]))):
+            exact.add(round((peak + 0.5) / fps, 4))
+        else:
+            exact.add(round(float(cut), 4))
+    return sorted(exact)
+
+
 def analyze_vertical_clip(
     input_path: Path,
     *,
@@ -870,7 +909,7 @@ def analyze_vertical_clip(
 
     if proc.returncode != 0:
         raise RuntimeError("Video analysis decoder failed; partial analysis discarded")
-    cuts = sorted(set(_scene_cuts_from_diffs(diffs)) | set(context_scene_cuts(context)))
+    cuts = exact_scene_cuts(input_path, sorted(set(_scene_cuts_from_diffs(diffs)) | set(context_scene_cuts(context))))
     return track, cuts, face_samples, context
 
 
