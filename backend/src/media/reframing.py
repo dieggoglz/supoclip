@@ -1212,6 +1212,7 @@ def kenburns_zoom_fragment(duration: float) -> Optional[str]:
 PEOPLE_FIT_REASONS = frozenset(
     {"interaction_exceeds_crop", "subjects_spread_across_frame", "subject_exceeds_crop"}
 )
+CLEAR_FACE_HEIGHT, CLEAR_FACE_RATE = 0.06, 0.5   # share of the frame's height, share of the samples
 INSERT_SAMPLES = 5
 INSERT_MIN_HEIGHT = 0.5         # of the frame
 INSERT_ASPECT = (0.4, 2.2)      # width / height: a vertical video, an article, a chart
@@ -1484,6 +1485,13 @@ def describe_vertical_layout(
         hits = sum(len(faces) >= WIDE_SHOT_FACES for faces in samples)
         return bool(samples) and hits / len(samples) >= WIDE_SHOT_FACE_RATE
 
+    def clear_person(start: float, end: float) -> bool:
+        """Someone is plainly on screen, whatever else the shot holds: a lamp's grid read as text must not shrink
+        them into a band with a blurred background (Diego, 31 Oct: the person always fills the frame)."""
+        samples = faces_in(start, end)
+        hits = sum(any(fh >= CLEAR_FACE_HEIGHT * height for _, _, _, fh in faces) for faces in samples)
+        return bool(samples) and hits / len(samples) >= CLEAR_FACE_RATE
+
     def pasted_rectangle(start: float, end: float) -> Optional[Tuple[int, int, int, int]]:
         box = find_portrait_insert(input_path, start, end)
         if not box:
@@ -1530,7 +1538,7 @@ def describe_vertical_layout(
     people_fits = [
         s for s in plan
         if s["kind"] == "fit" and not overlaps_pasted(s)
-        and (s.get("reason") in PEOPLE_FIT_REASONS or many_people(s["start"], s["end"]))
+        and (s.get("reason") in PEOPLE_FIT_REASONS or many_people(s["start"], s["end"]) or clear_person(s["start"], s["end"]))
     ]
     content_fits = [
         s for s in plan
@@ -1581,7 +1589,7 @@ def describe_vertical_layout(
         choose_talking_head_layout(width, height, face_samples, scene_cuts)
         if not content_fits else None
     )
-    if talking and talking["kind"] == "fit" and people_fits:
+    if talking and talking["kind"] in ("fit", "stage") and people_fits:
         talking = None      # a whole set seen from afar is not a video-call gallery: show who talks
     speaker_chain = None
     if people_fits:
