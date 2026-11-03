@@ -114,6 +114,29 @@ def _call_pairs(samples: Sequence[FaceFrame], width: int, height: int) -> List[T
     return pairs
 
 
+def _spread(boxes: Sequence[Box]) -> float:
+    """How much a box wanders: the largest standard deviation of its centre and width, in pixels."""
+    def std(xs: Sequence[float]) -> float:
+        mean = sum(xs) / len(xs)
+        return (sum((x - mean) ** 2 for x in xs) / len(xs)) ** 0.5
+
+    return max(
+        std([box[0] + box[2] / 2 for box in boxes]),
+        std([box[1] + box[3] / 2 for box in boxes]),
+        std([box[2] for box in boxes]),
+    )
+
+
+def _object_beside_a_person(pairs: Sequence[Tuple[Box, Box]], width: int) -> bool:
+    """One side never moves while the other does: a poster or a drum read as a face, not a second webcam.
+
+    Two real webcams both drift a little, and two frozen boxes (a still test frame) say nothing either way.
+    """
+    left, right = _spread([pair[0] for pair in pairs]), _spread([pair[1] for pair in pairs])
+    still, moving = width * 0.002, width * 0.006
+    return (left < still and right > moving) or (right < still and left > moving)
+
+
 def _median_box(boxes: Sequence[Box]) -> Box:
     return (
         _median([box[0] for box in boxes]),
@@ -298,7 +321,7 @@ def choose_talking_head_layout(
         return _fit_plan(width, height)
 
     pairs = _call_pairs(faced, width, height)
-    if len(pairs) >= 4 and len(pairs) >= int(len(faced) * 0.5):
+    if len(pairs) >= 4 and len(pairs) >= int(len(faced) * 0.5) and not _object_beside_a_person(pairs, width):
         left = _median_box([pair[0] for pair in pairs])
         right = _median_box([pair[1] for pair in pairs])
         return _stack_plan(width, height, left, right)
