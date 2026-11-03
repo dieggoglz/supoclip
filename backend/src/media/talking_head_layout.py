@@ -115,15 +115,17 @@ def _call_pairs(samples: Sequence[FaceFrame], width: int, height: int) -> List[T
 
 
 def _spread(boxes: Sequence[Box]) -> float:
-    """How much a box wanders: the largest standard deviation of its centre and width, in pixels."""
-    def std(xs: Sequence[float]) -> float:
-        mean = sum(xs) / len(xs)
-        return (sum((x - mean) ** 2 for x in xs) / len(xs)) ** 0.5
+    """How much a box wanders, in pixels: the largest robust spread (1.4826 × median absolute deviation) of its centre
+    and width. Robust because one stray detection must not make a still object look like it moves (VladTV: a single
+    outlier lifted the drum's standard deviation from 2.6 to 5.1 px)."""
+    def mad(xs: Sequence[float]) -> float:
+        centre = _median(xs)
+        return 1.4826 * _median([abs(x - centre) for x in xs])
 
     return max(
-        std([box[0] + box[2] / 2 for box in boxes]),
-        std([box[1] + box[3] / 2 for box in boxes]),
-        std([box[2] for box in boxes]),
+        mad([box[0] + box[2] / 2 for box in boxes]),
+        mad([box[1] + box[3] / 2 for box in boxes]),
+        mad([box[2] for box in boxes]),
     )
 
 
@@ -133,7 +135,7 @@ def _object_beside_a_person(pairs: Sequence[Tuple[Box, Box]], width: int) -> boo
     Two real webcams both drift a little, and two frozen boxes (a still test frame) say nothing either way.
     """
     left, right = _spread([pair[0] for pair in pairs]), _spread([pair[1] for pair in pairs])
-    still, moving = width * 0.002, width * 0.006
+    still, moving = width * 0.002, width * 0.004      # VladTV at 1920: drum 1.8 px, guest 11.3 px
     return (left < still and right > moving) or (right < still and left > moving)
 
 

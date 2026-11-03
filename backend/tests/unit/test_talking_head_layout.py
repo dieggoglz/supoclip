@@ -76,14 +76,27 @@ def test_side_by_side_webcams_use_a_stacked_layout():
 
 def test_a_static_object_next_to_a_moving_face_is_not_a_call():
     # VladTV (clip-ops 193-200): a drum kit read as a face beside the guest. The drum never moves; she does.
+    # One stray detection of the drum (a bigger box) must not make it look like it moves.
     samples = []
     for index in range(12):
         sway = (index % 4) * 14
-        samples.append((index / 3.0, [(160, 480, 220, 200), (1100 + sway, 500 + sway // 2, 220 + sway // 3, 200 + sway // 3)]))
+        drum = (130, 450, 280, 260) if index == 5 else (160, 480, 220, 200)
+        samples.append((index / 3.0, [drum, (1100 + sway, 500 + sway // 2, 220 + sway // 3, 200 + sway // 3)]))
 
     layout = choose_talking_head_layout(1920, 1080, samples, scene_cuts=[])
 
     assert layout is None or layout["kind"] != "stack"
+
+
+def test_two_webcams_that_both_drift_are_still_a_call():
+    samples = []
+    for index in range(12):
+        sway = (index % 4) * 14
+        samples.append((index / 3.0, [(160 + sway, 480, 220, 200), (1100 - sway, 500, 220, 200)]))
+
+    layout = choose_talking_head_layout(1920, 1080, samples, scene_cuts=[])
+
+    assert layout is not None and layout["kind"] == "stack"
 
 
 def test_gallery_is_shown_in_full_instead_of_zooming_one_tile():
