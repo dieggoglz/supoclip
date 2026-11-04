@@ -67,8 +67,27 @@ def validate_render_segments(value: Any, source_duration_seconds: Optional[float
         inserts = validate_inserts(item.get("inserts"), clip_seconds)
         if inserts:
             segment["inserts"] = inserts
+        crop = _validate_crop(item.get("crop"), number)
+        if crop:
+            segment["crop"] = crop
         segments.append(segment)
     return segments
+
+
+def _validate_crop(value: Any, number: int) -> Optional[Dict[str, float]]:
+    """None, or a fixed 9:16 window chosen outside SupoClip: {x (centre), y (top), h} as fractions of the source,
+    and optionally caption_y (0-1 of the output). For a guest the face tracker frames badly, or a logo burned into
+    the source that a tighter crop leaves out (clip-ops, Full Send: Diego wanted the guest centred and closer)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {"x", "y", "h", "caption_y"}:
+        raise ValueError(f"Segment {number}: crop must be an object with x, y, h and optionally caption_y")
+    x, y, h = _seconds(value.get("x")), _seconds(value.get("y", 0)), _seconds(value.get("h", 1))
+    caption_y = _seconds(value.get("caption_y", 0.70))
+    if None in (x, y, h, caption_y) or not 0 <= x <= 1 or not 0 <= y < 1 or not 0.2 <= h <= 1 or y + h > 1.0001 \
+            or not 0.1 <= caption_y <= 0.95:
+        raise ValueError(f"Segment {number}: crop needs x 0-1, y 0-1, h 0.2-1 with y + h <= 1, caption_y 0.1-0.95")
+    return {"x": x, "y": y, "h": h, "caption_y": caption_y}
 
 
 def _validate_ending(value: Any, number: int) -> Optional[Dict[str, float]]:

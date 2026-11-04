@@ -9,6 +9,7 @@ from .media.common import (
     Path,
     Tuple,
     VALID_OUTPUT_FORMATS,
+    VERTICAL_SCALE_CHAIN,
     find_font_path,
     get_template,
     logger,
@@ -254,6 +255,15 @@ class VideoProcessor:
         return settings.get(target_quality, settings["high"])
 
 
+def fixed_crop_filter(src_w: int, src_h: int, crop: Dict[str, float]) -> str:
+    """The ffmpeg chain for a request's fixed window: h of the source height from y, centred on x, at 9:16."""
+    h = min(src_h, round_to_even(int(crop["h"] * src_h)))
+    w = min(src_w, round_to_even(int(h * 9 / 16)))
+    x = max(0, min(src_w - w, round_to_even(int(crop["x"] * src_w - w / 2))))
+    y = max(0, min(src_h - h, round_to_even(int(crop["y"] * src_h))))
+    return f"crop={w}:{h}:{x}:{y},{VERTICAL_SCALE_CHAIN}"
+
+
 def create_optimized_clip(
     video_path: Path,
     start_time: float,
@@ -271,10 +281,12 @@ def create_optimized_clip(
     layout_report: Optional[Dict[str, Any]] = None,
     static_text: bool = False,
     inserts: Optional[List[Dict[str, Any]]] = None,
+    crop: Optional[Dict[str, float]] = None,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size).
     static_text: hook title for the whole clip without entrance, captions without per-word effects.
-    inserts: video over the clip and under the captions (media/inserts.py)."""
+    inserts: video over the clip and under the captions (media/inserts.py).
+    crop: a fixed 9:16 window {x, y, h, caption_y} (render_segments._validate_crop) instead of the automatic layout."""
     try:
         if keep_ranges:
             effective_keep_ranges = normalize_source_ranges(keep_ranges)
@@ -382,7 +394,11 @@ def create_optimized_clip(
             speaker_words: List[Dict[str, Any]] = []
             vertical_plan = None
             caption_y = None
-            if reframe_format == "vertical":
+            if reframe_format == "vertical" and crop:
+                vertical_plan = (fixed_crop_filter(src_w, src_h, crop), "vf")
+                caption_y = crop["caption_y"]
+                logger.info("Fixed crop from the request: %s", crop)
+            elif reframe_format == "vertical":
                 if get_config().speaker_framing:
                     try:
                         speaker_turns, speaker_words = build_clip_speaker_turns(
@@ -562,6 +578,7 @@ def create_clips_from_segments(
                 layout_report=layout_report,
                 static_text=bool(segment.get("static_text")),
                 inserts=segment.get("inserts") or None,
+                crop=segment.get("crop") or None,
             )
 
             if success:

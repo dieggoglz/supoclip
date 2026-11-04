@@ -377,3 +377,21 @@ def test_static_text_is_optional_and_must_be_a_boolean():
     assert segments[0]["static_text"] is True and "static_text" not in segments[1]
     with pytest.raises(ValueError, match="static_text"):
         validate_render_segments([{"start": 0, "end": 10, "static_text": "yes"}], 60)
+
+
+def test_a_fixed_crop_is_kept_and_checked():
+    # clip-ops, Full Send: the guest centred and closer, with the logo burned into the source left out
+    [segment] = validate_render_segments([{"start": 10, "end": 30, "crop": {"x": 0.25, "y": 0.06, "h": 0.72}}], 600)
+    assert segment["crop"] == {"x": 0.25, "y": 0.06, "h": 0.72, "caption_y": 0.70}
+    for bad in ({"x": 1.4}, {"x": 0.5, "h": 0.1}, {"x": 0.5, "y": 0.5, "h": 0.8}, {"x": 0.5, "zoom": 2}):
+        with pytest.raises(ValueError):
+            validate_render_segments([{"start": 10, "end": 30, "crop": bad}], 600)
+
+
+def test_the_fixed_crop_window_is_9_16_and_stays_inside_the_frame():
+    from src.video_utils import fixed_crop_filter
+
+    chain = fixed_crop_filter(1920, 1080, {"x": 0.25, "y": 0.06, "h": 0.72, "caption_y": 0.7})
+    assert chain.startswith("crop=436:776:262:64,scale=1080:1920")
+    edge = fixed_crop_filter(1920, 1080, {"x": 0.0, "y": 0.0, "h": 1.0, "caption_y": 0.7})
+    assert edge.startswith("crop=606:1080:0:0,")

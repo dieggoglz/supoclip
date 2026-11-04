@@ -507,6 +507,7 @@ class ClipEditingMixin:
                 **({"exact_end": True} if segment.get("ending") else {}),
                 **({"static_text": True} if segment.get("static_text") else {}),
                 **({"inserts": segment["inserts"]} if segment.get("inserts") else {}),
+                **({"crop": segment["crop"]} if segment.get("crop") else {}),
             }
             for segment in segments
         ]
