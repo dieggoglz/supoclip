@@ -38,6 +38,9 @@ from .transcription import (
     load_cached_transcript_data,
 )
 
+# A word shorter than this was not really timed by the aligner (pause cleanup must not trust the gap after a run of them)
+COLLAPSED_WORD_SECONDS = 0.04
+
 
 def word_ends_sentence(text: str) -> bool:
     return bool(SENTENCE_END_RE.search((text or "").strip()))
@@ -1013,9 +1016,16 @@ def build_clip_keep_ranges(
         if leading_gap >= pause_threshold_seconds:
             compress_pause(clip_start, spoken_words[0]["start"], 0.0, PAUSE_LEAD_IN_SECONDS)
 
-        for current, nxt in zip(spoken_words, spoken_words[1:]):
+        def collapsed(index: int) -> bool:
+            """Two or more words in a row with no length: the aligner lost them, and the "pause" after them is
+            where they are really said (Full Send: "last week I actually donated" at 20 ms a word, then 2 s)."""
+            return index >= 1 and all(
+                spoken_words[i]["end"] - spoken_words[i]["start"] < COLLAPSED_WORD_SECONDS for i in (index - 1, index)
+            )
+
+        for index, (current, nxt) in enumerate(zip(spoken_words, spoken_words[1:])):
             gap = nxt["start"] - current["end"]
-            if gap >= pause_threshold_seconds:
+            if gap >= pause_threshold_seconds and not collapsed(index):
                 compress_pause(
                     current["end"],
                     nxt["start"],

@@ -412,3 +412,26 @@ def test_clip_of_only_filler_words_keeps_original_range(monkeypatch):
     )
 
     assert keep_ranges == [(0.0, 3.0)]
+
+
+def test_a_gap_after_collapsed_word_timings_is_speech_not_a_pause(monkeypatch):
+    # Full Send (clip-ops 222): "last week I actually donated" came back 20 ms per word, then a 2 s "gap" before
+    # "$100,000". That gap is where the words are really said; cutting it cut "donated".
+    transcript_data = {
+        "words": [
+            {"text": "people.", "start": 0, "end": 400},
+            {"text": "last", "start": 400, "end": 420},
+            {"text": "week", "start": 420, "end": 440},
+            {"text": "donated", "start": 440, "end": 460},
+            {"text": "$100,000", "start": 2500, "end": 2900},
+            {"text": "to", "start": 2900, "end": 3100},
+        ]
+    }
+    monkeypatch.setattr("src.media.timeline.load_cached_transcript_data", lambda _video_path: transcript_data)
+
+    keep_ranges = build_clip_keep_ranges(
+        Path("/tmp/demo.mp4"), 0.0, 3.1,
+        {"cut_long_pauses": True, "pause_threshold_ms": 900, "remove_filler_words": False, "filtered_words": []},
+    )
+
+    assert keep_ranges == [pytest.approx((0.0, 3.1))]
